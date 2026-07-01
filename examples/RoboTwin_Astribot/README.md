@@ -12,6 +12,8 @@ Astribot-specific contents:
 - `train_files/managed_runs/fast_subtask_action_12_wos/`: managed 12-history-frame training run.
 - `train_files/managed_runs/fast_subtask_action_6_wos/`: managed 6-history-frame run initialized from the 12-frame checkpoint.
 - `train_files/managed_runs/fast_subtask_action_6_ws/`: managed 6-history-frame QwenFastState run with state tokens.
+- `train_files/managed_runs/fast_subtask_no_0_wos/`: managed 0-history-frame QwenFast run.
+- `train_files/managed_runs/fast_subtask_no_0_ws/`: managed 0-history-frame QwenFastState run with state tokens.
 
 ## 4-GPU training notes
 
@@ -19,7 +21,9 @@ The managed run `fast_subtask_action_12_wos` was smoke-tested on a Slurm
 node with 4 H100 GPUs. `fast_subtask_action_6_wos` uses the same launcher
 pattern and initializes from the 12-frame checkpoint. `fast_subtask_action_6_ws`
 uses `QwenFastState` and conditions on one state token per input frame. Use the
-`starVLA` conda environment.
+`starVLA` conda environment. `fast_subtask_no_0_wos` disables history entirely
+and uses only the current image. `fast_subtask_no_0_ws` is the matching
+no-history state-token run.
 
 The default base VLM is:
 
@@ -87,6 +91,42 @@ Start its inference server:
 
 ```bash
 bash examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_6_ws/run_policy_server.sh
+```
+
+0-history no-state run:
+
+```bash
+bash examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_no_0_wos/run_train.sh
+```
+
+Queue the 0-history run through `yhbatch`:
+
+```bash
+yhbatch examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_no_0_wos/submit_yhbatch.sh
+```
+
+Start its inference server:
+
+```bash
+bash examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_no_0_wos/run_policy_server.sh
+```
+
+0-history state-token run:
+
+```bash
+bash examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_no_0_ws/run_train.sh
+```
+
+Queue the 0-history state-token run through `yhbatch`:
+
+```bash
+yhbatch examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_no_0_ws/submit_yhbatch.sh
+```
+
+Start its inference server:
+
+```bash
+bash examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_no_0_ws/run_policy_server.sh
 ```
 
 Smoke test:

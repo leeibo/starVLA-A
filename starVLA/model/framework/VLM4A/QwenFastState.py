@@ -9,6 +9,7 @@ state history. Each state vector is projected to one soft token and inserted
 before the supervised assistant response.
 """
 
+from contextlib import nullcontext
 from typing import List, Optional
 
 import numpy as np
@@ -54,7 +55,18 @@ class StateHistoryEncoder(nn.Module):
         if state_history.shape[-1] != self.state_dim:
             raise ValueError(f"Expected state_dim={self.state_dim}, got {state_history.shape[-1]}")
 
-        state_tokens = self.net(state_history)
+        ref_param = next(self.parameters())
+        state_history = state_history.to(device=ref_param.device, dtype=ref_param.dtype)
+        if not state_history.is_contiguous():
+            state_history = state_history.contiguous()
+
+        autocast_context = (
+            torch.autocast(state_history.device.type, enabled=False)
+            if state_history.device.type in {"cpu", "cuda"}
+            else nullcontext()
+        )
+        with autocast_context:
+            state_tokens = self.net(state_history)
         if self.frame_embedding is not None:
             num_frames = state_tokens.shape[0]
             if num_frames > self.max_frames:
@@ -62,7 +74,8 @@ class StateHistoryEncoder(nn.Module):
                     f"state_history has {num_frames} frames, larger than state_model.max_frames={self.max_frames}"
                 )
             frame_ids = torch.arange(num_frames, device=state_tokens.device)
-            state_tokens = state_tokens + self.frame_embedding(frame_ids)
+            frame_tokens = self.frame_embedding(frame_ids).to(dtype=state_tokens.dtype)
+            state_tokens = state_tokens + frame_tokens
         return state_tokens
 
 

@@ -231,6 +231,12 @@ class Qwenvl_Fast(baseframework):
                 **qwen_inputs,
                 max_length=2048,
             )
+        prompt_length = qwen_inputs["input_ids"].shape[1]
+        generated_text = self.qwen_vl_interface.processor.tokenizer.batch_decode(
+            generated_ids[:, prompt_length:],
+            skip_special_tokens=False,
+            clean_up_tokenization_spaces=False,
+        )
         # --- Extract and decoder vlm_action to continue actions ---
         # --- extrace token (index based on VLM) ---
         batch_vlm_action_token_ids = self._extract_action_token_ids(generated_ids)
@@ -246,7 +252,7 @@ class Qwenvl_Fast(baseframework):
         # --- decode fast tokenizer index to action semantic ---
         normalized_actions = self.action_model.fast_tokenizer.decode(batch_fast_action_token_idx)
 
-        return {"normalized_actions": normalized_actions}
+        return {"normalized_actions": normalized_actions, "text": generated_text}
 
     def _extract_action_token_ids(
         self,

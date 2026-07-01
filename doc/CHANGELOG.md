@@ -21,6 +21,62 @@ Notes:
 - Remaining risk, assumptions, or follow-up
 ```
 
+## 2026-07-01 - QwenFastState State Encoder BF16 Fix
+
+Scope:
+- `starVLA/model/framework/VLM4A/QwenFastState.py`
+
+Changes:
+- Cast `StateHistoryEncoder` inputs to the encoder parameter dtype/device before LayerNorm and MLP projection.
+- Run the state encoder projection with autocast disabled to avoid mixed `float32`/`bfloat16` LayerNorm failures during eval and inference.
+- Cast frame-position state embeddings to the projected state-token dtype before addition.
+
+Validation:
+- `python -m py_compile starVLA/model/framework/VLM4A/QwenFastState.py`
+- Instantiated `StateHistoryEncoder` in both `float32` and `bfloat16`; verified a float32 state input produces matching output dtype without LayerNorm dtype errors.
+
+## 2026-07-01 - Managed Run fast_subtask_no_0_ws
+
+Scope:
+- `examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_no_0_ws/`
+- `examples/RoboTwin_Astribot/README.md`
+
+Changes:
+- Added a managed run for `fast_subtask_no_0_ws`.
+- Set `framework.name: QwenFastState` and `datasets.vla_data.include_state: true`.
+- Added `framework.state_model` with 18-D state inputs and one state token per current-frame sample.
+- Disabled history with `history.enabled: false` and `history.max_frames: 0`; kept subtask `<think>` supervision and the offline `Qwen3-VL-2B-Instruct-Action` base VLM.
+- Added `run_train.sh`, `submit_yhbatch.sh`, `run_policy_server.sh`, and run-local README using the managed run conventions.
+
+Validation:
+- Parsed `config.yaml` with `OmegaConf` using `/HOME/hlkj_zql/hlkj_zql_8/HDD_POOL/conda_envs/starVLA/bin/python`.
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_no_0_ws/run_train.sh`
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_no_0_ws/submit_yhbatch.sh`
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_no_0_ws/run_policy_server.sh`
+- Confirmed `run_train.sh` does not pass training semantic dotlist overrides.
+- `git diff --check`.
+- Checked the new untracked run files for trailing whitespace.
+
+## 2026-06-30 - Managed Run fast_subtask_no_0_wos
+
+Scope:
+- `examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_no_0_wos/`
+- `examples/RoboTwin_Astribot/README.md`
+
+Changes:
+- Added a managed run for `fast_subtask_no_0_wos`.
+- Set `framework.name: QwenFast` and `datasets.vla_data.include_state: false`.
+- Kept subtask `<think>` supervision and the offline `Qwen3-VL-2B-Instruct-Action` base VLM.
+- Disabled history with `history.enabled: false` and `history.max_frames: 0`; `no` is only the run-name history-keyframe field.
+- Added `run_train.sh`, `submit_yhbatch.sh`, `run_policy_server.sh`, and run-local README using the managed run conventions.
+
+Validation:
+- Parsed `config.yaml` with `OmegaConf`.
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_no_0_wos/run_train.sh`
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_no_0_wos/submit_yhbatch.sh`
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_no_0_wos/run_policy_server.sh`
+- `git diff --check`.
+
 ## 2026-06-28 - FAST Multi-Frame History Prompt Support
 
 Scope:
