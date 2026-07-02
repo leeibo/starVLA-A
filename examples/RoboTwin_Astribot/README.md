@@ -11,6 +11,7 @@ Astribot-specific contents:
 - `train_files/starvla_fast_state_robotwin_astribot_history.yaml`: QwenFastState history config.
 - `train_files/managed_runs/fast_subtask_action_12_wos/`: managed 12-history-frame training run.
 - `train_files/managed_runs/fast_subtask_action_6_wos/`: managed 6-history-frame run initialized from the 12-frame checkpoint.
+- `train_files/managed_runs/fast_subtask_action_6_wos_test1/`: debug 6-history-frame run using only `beat_block_hammer_rotate_view`.
 - `train_files/managed_runs/fast_subtask_action_6_ws/`: managed 6-history-frame QwenFastState run with state tokens.
 - `train_files/managed_runs/fast_subtask_no_0_wos/`: managed 0-history-frame QwenFast run.
 - `train_files/managed_runs/fast_subtask_no_0_ws/`: managed 0-history-frame QwenFastState run with state tokens.
@@ -73,6 +74,24 @@ Start its inference server:
 
 ```bash
 bash examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_6_wos/run_policy_server.sh
+```
+
+6-frame single-task debug run:
+
+```bash
+bash examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_6_wos_test1/run_train.sh
+```
+
+Queue the single-task debug run through `yhbatch`:
+
+```bash
+yhbatch examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_6_wos_test1/submit_yhbatch.sh
+```
+
+Start its inference server:
+
+```bash
+bash examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_6_wos_test1/run_policy_server.sh
 ```
 
 6-frame state-token run:

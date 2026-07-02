@@ -101,7 +101,7 @@ DATASET_NAMED_MIXTURES = {
     "robotwin_astribot": [(task, _astribot_task_weight(task), "robotwin_astribot") for task in ASTRIBOT_TASKS],
     "robotwin_astribot_all": [(task, _astribot_task_weight(task), "robotwin_astribot") for task in ASTRIBOT_TASKS],
     "robotwin_astribot_all_50": [(task, _astribot_task_weight(task), "robotwin_astribot50") for task in ASTRIBOT_TASKS],
-    "robotwin_astribot_task1": [("shake_bottle_rotate_view", 1.0, "robotwin_astribot")],
+    "robotwin_astribot_task1": [("beat_block_hammer_rotate_view", 1.0, "robotwin_astribot")],
     "robotwin_astribot_task2": [
         ("place_a2b_left_rotate_view", 1.0, "robotwin_astribot"),
         ("place_a2b_right_rotate_view", 1.0, "robotwin_astribot"),

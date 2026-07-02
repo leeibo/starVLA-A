@@ -21,6 +21,128 @@ Notes:
 - Remaining risk, assumptions, or follow-up
 ```
 
+## 2026-07-02 - fast_subtask_action_6_wos_test1 Fresh Start
+
+Scope:
+- `examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_6_wos_test1/config.yaml`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_6_wos_test1/README.md`
+
+Changes:
+- Set `trainer.is_resume: false` for `fast_subtask_action_6_wos_test1`.
+- Kept `trainer.pretrained_checkpoint` unset, so this run starts from the configured base VLM instead of a managed-run checkpoint.
+- Updated the run README to document fresh-start behavior.
+
+Validation:
+- Parsed the updated `config.yaml` with `OmegaConf`.
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_6_wos_test1/run_train.sh`
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_6_wos_test1/submit_yhbatch.sh`
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_6_wos_test1/run_policy_server.sh`
+- `git diff --check`.
+
+## 2026-07-02 - QwenFast Decode Failure Long Preview
+
+Scope:
+- `starVLA/model/framework/VLM4A/QwenFast.py`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_6_wos_test1/config.yaml`
+
+Changes:
+- Increased QwenFast decode-failure `text_preview` and `actual_action_text_preview` from 500 chars to configurable 4096 chars for the test run.
+- Added tail preview, character counts, and truncation flags to decode-failure details.
+- For missing `</action>` failures, now records the partial text after `<action>` in `actual_action_text_preview`.
+- Added `has_open_action_tag` and `has_close_action_tag` flags for incomplete action-block failures.
+
+Validation:
+- `python -m py_compile starVLA/model/framework/VLM4A/QwenFast.py`
+- Confirmed `fast_decode_failure_preview_chars` and `fast_decode_failure_tail_chars` are present in the test run config with `rg`.
+- `git diff --check`.
+
+## 2026-07-02 - QwenFast Eval Decode Failure Detail
+
+Scope:
+- `starVLA/model/framework/VLM4A/QwenFast.py`
+- `starVLA/training/train_starvla.py`
+
+Changes:
+- Passed eval target FAST token ids into `predict_action`.
+- Expanded FAST decode failure details with actual token count, actual decoded coefficient count, actual action text preview, target token count, target decoded coefficient count, and target token preview.
+- Added the same target-vs-actual detail for missing, empty, or out-of-range `<action>` blocks.
+- Added `text_preview` to every decode failure detail and log the full detail on every eval decode failure instead of only the first failure.
+
+Validation:
+- `python -m py_compile starVLA/model/framework/VLM4A/QwenFast.py starVLA/training/train_starvla.py`
+- `git diff --check`.
+
+## 2026-07-02 - QwenFast Action-Block Token Extraction
+
+Scope:
+- `starVLA/model/framework/VLM4A/QwenFast.py`
+- `starVLA/training/train_starvla.py`
+
+Changes:
+- Changed QwenFast eval/inference action token extraction to parse only the generated `<action>...</action>` block.
+- Extracted FAST ids from `<robot_action_N>` strings inside that block instead of filtering all action-token ids from the full generated sequence.
+- Treated missing, empty, or out-of-range action blocks as action decode failures that eval can skip without crashing training.
+
+Validation:
+- `python -m py_compile starVLA/model/framework/VLM4A/QwenFast.py starVLA/training/train_starvla.py`
+- Ran a lightweight extractor check confirming tokens outside `<action>...</action>` are ignored and missing action blocks raise the expected decode failure.
+- `git diff --check`.
+
+## 2026-07-02 - fast_subtask_action_6_wos_test1 Resume Mode
+
+Scope:
+- `examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_6_wos_test1/config.yaml`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_6_wos_test1/README.md`
+
+Changes:
+- Set `trainer.is_resume: true` for `fast_subtask_action_6_wos_test1`.
+- Kept `trainer.pretrained_checkpoint` unset, so resume uses only the run-local latest checkpoint.
+- Documented that missing run-local checkpoints fall back to the configured base VLM.
+
+Validation:
+- Parsed the updated `config.yaml` with `OmegaConf`.
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_6_wos_test1/run_train.sh`
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_6_wos_test1/submit_yhbatch.sh`
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_6_wos_test1/run_policy_server.sh`
+- `git diff --check`.
+
+## 2026-07-02 - QwenFast Eval Generation Headroom
+
+Scope:
+- `starVLA/model/framework/VLM4A/QwenFast.py`
+- `starVLA/training/train_starvla.py`
+
+Changes:
+- Changed QwenFast action eval generation from `max_length=2048` to `max_new_tokens`, so long multi-image prompts do not consume the action-token generation budget.
+- Kept deterministic eval generation with `do_sample: false`.
+- Logged the first FAST decode failure detail, including whether generation produced no action tokens or an invalid decoded coefficient count.
+
+Validation:
+- `python -m py_compile starVLA/model/framework/VLM4A/QwenFast.py starVLA/training/train_starvla.py`
+- `git diff --check`.
+
+## 2026-07-02 - Managed Run fast_subtask_action_6_wos_test1
+
+Scope:
+- `examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_6_wos_test1/`
+- `examples/RoboTwin_Astribot/train_files/data_registry/data_config.py`
+- `examples/RoboTwin_Astribot/README.md`
+
+Changes:
+- Added a debug managed run derived from `fast_subtask_action_6_wos`.
+- Set `run_id: fast_subtask_action_6_wos_test1`.
+- Set `datasets.vla_data.data_mix: robotwin_astribot_task1`.
+- Set `robotwin_astribot_task1` to only `beat_block_hammer_rotate_view`.
+- Kept `QwenFast`, no-state input, and 6 history frames.
+- Removed `trainer.pretrained_checkpoint`, so this run does not initialize from `fast_subtask_action_12_wos`.
+
+Validation:
+- Parsed the new `config.yaml` with `OmegaConf`.
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_6_wos_test1/run_train.sh`
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_6_wos_test1/submit_yhbatch.sh`
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_6_wos_test1/run_policy_server.sh`
+- `git diff --check`.
+
 ## 2026-07-01 - QwenFastState State Encoder BF16 Fix
 
 Scope:
@@ -448,7 +570,6 @@ Validation:
 - `bash -n` for the three added `run_policy_server.sh` scripts.
 - Confirmed no `submit_policy_server_yhbatch.sh` files exist under the Astribot managed runs.
 - Confirmed `examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_no_0_wos` does not exist.
-- `git diff --check`.
 
 ## 2026-06-28 - Training Config Writing Guidelines
 

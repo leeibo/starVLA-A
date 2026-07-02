@@ -153,7 +153,12 @@ class Qwenvl_Fast_State(Qwenvl_Fast):
         core_model.rope_deltas = rope_deltas
         return position_ids
 
-    def _prepare_state_conditioned_inputs(self, qwen_inputs, state_histories: List[np.ndarray]) -> dict:
+    def _prepare_state_conditioned_inputs(
+        self,
+        qwen_inputs,
+        state_histories: List[np.ndarray],
+        include_input_ids: bool = False,
+    ) -> dict:
         input_ids = qwen_inputs["input_ids"]
         attention_mask = qwen_inputs["attention_mask"]
         labels = qwen_inputs.get("labels", None)
@@ -223,9 +228,94 @@ class Qwenvl_Fast_State(Qwenvl_Fast):
         prepared["inputs_embeds"] = padded_embeds
         prepared["attention_mask"] = padded_attention
         prepared["position_ids"] = self._build_position_ids(padded_input_ids, padded_attention, qwen_inputs)
+        if include_input_ids:
+            prepared["input_ids"] = padded_input_ids
         if padded_labels is not None:
             prepared["labels"] = padded_labels
         return prepared
+
+    def _generate_state_conditioned_ids(
+        self,
+        qwen_inputs: dict,
+        max_new_tokens: int,
+    ) -> torch.LongTensor:
+        """Greedy generation path that preserves state soft-token embeddings."""
+        model = self.qwen_vl_interface.model
+        tokenizer = self.qwen_vl_interface.processor.tokenizer
+        input_ids = qwen_inputs["input_ids"]
+        inputs_embeds = qwen_inputs["inputs_embeds"]
+        attention_mask = qwen_inputs["attention_mask"]
+        position_ids = qwen_inputs.get("position_ids", None)
+        device = inputs_embeds.device
+        batch_size = inputs_embeds.shape[0]
+
+        generation_config = model.generation_config
+        pad_token_id = generation_config.pad_token_id
+        if pad_token_id is None:
+            pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id or 0
+        pad_token_id = int(pad_token_id)
+
+        eos_token_id = generation_config.eos_token_id
+        if eos_token_id is None:
+            eos_token_ids = None
+        elif isinstance(eos_token_id, int):
+            eos_token_ids = torch.tensor([eos_token_id], device=device)
+        else:
+            eos_token_ids = torch.tensor(list(eos_token_id), device=device)
+
+        prefill_kwargs = {
+            key: value
+            for key, value in qwen_inputs.items()
+            if key not in {"input_ids", "inputs_embeds", "attention_mask", "position_ids", "labels"}
+        }
+        generated_ids = input_ids
+        unfinished = torch.ones(batch_size, dtype=torch.long, device=device)
+        past_key_values = None
+        next_input_ids = None
+
+        for step_idx in range(int(max_new_tokens)):
+            if step_idx == 0:
+                outputs = model(
+                    input_ids=None,
+                    inputs_embeds=inputs_embeds,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    use_cache=True,
+                    return_dict=True,
+                    logits_to_keep=1,
+                    **prefill_kwargs,
+                )
+            else:
+                outputs = model(
+                    input_ids=next_input_ids,
+                    attention_mask=attention_mask,
+                    past_key_values=past_key_values,
+                    use_cache=True,
+                    return_dict=True,
+                    logits_to_keep=1,
+                )
+
+            next_tokens = torch.argmax(outputs.logits[:, -1, :], dim=-1)
+            past_key_values = outputs.past_key_values
+
+            if eos_token_ids is not None:
+                next_tokens = next_tokens * unfinished + pad_token_id * (1 - unfinished)
+
+            generated_ids = torch.cat([generated_ids, next_tokens[:, None]], dim=-1)
+            attention_mask = torch.cat(
+                [attention_mask, torch.ones((batch_size, 1), dtype=attention_mask.dtype, device=device)],
+                dim=-1,
+            )
+
+            if eos_token_ids is not None:
+                is_eos = (next_tokens[:, None] == eos_token_ids[None, :]).any(dim=-1)
+                unfinished = unfinished & ~is_eos
+                if int(unfinished.max().item()) == 0:
+                    break
+
+            next_input_ids = next_tokens[:, None]
+
+        return generated_ids
 
     def forward(
         self,
@@ -275,16 +365,14 @@ class Qwenvl_Fast_State(Qwenvl_Fast):
         state_histories = [self._example_state_history(example) for example in examples]
 
         qwen_inputs = self.qwen_vl_interface.build_qwenvl_inputs(images=batch_images, instructions=instructions)
-        qwen_inputs = self._prepare_state_conditioned_inputs(qwen_inputs, state_histories)
+        qwen_inputs = self._prepare_state_conditioned_inputs(qwen_inputs, state_histories, include_input_ids=True)
         max_new_tokens = int(kwargs.get("max_new_tokens", self.config.framework.get("max_new_tokens", 2048)))
 
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            generated_ids = self.qwen_vl_interface.model.generate(
-                **qwen_inputs,
-                max_new_tokens=max_new_tokens,
-            )
+            generated_ids = self._generate_state_conditioned_ids(qwen_inputs, max_new_tokens=max_new_tokens)
 
         batch_vlm_action_token_ids = self._extract_action_token_ids(generated_ids)
         batch_fast_action_token_idx = self._decode_action_tokens(batch_vlm_action_token_ids)
+        self._validate_fast_action_token_sequences(batch_fast_action_token_idx)
         normalized_actions = self.action_model.fast_tokenizer.decode(batch_fast_action_token_idx)
         return {"normalized_actions": normalized_actions}

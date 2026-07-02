@@ -289,7 +289,11 @@ class _QWen_VL_Interface(nn.Module):
                 for m in prompt_messages
             ]
             batch_input["labels"] = mask_labels_to_response(
-                batch_input, self.processor.tokenizer, prompt_texts, ignore_index=IGNORE_INDEX
+                batch_input,
+                self.processor.tokenizer,
+                prompt_texts,
+                ignore_index=IGNORE_INDEX,
+                response_texts=solutions,
             )
 
         return batch_input.to(self.model.device)

@@ -17,6 +17,7 @@ Note: How to add special tokens to Qwen2.5:
   download our model checkpoint with special tokens added: https://huggingface.co/StarVLA/Qwen2.5-VL-3B-Instruct-Action
 """
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -91,6 +92,8 @@ class QwenFastDefaultConfig:
             "action_token_init_strategy": "normal",
         }
     )
+    fast_decode_failure_preview_chars: int = 4096
+    fast_decode_failure_tail_chars: int = 1024
 
 
 @FRAMEWORK_REGISTRY.register("QwenFast")
@@ -226,10 +229,12 @@ class Qwenvl_Fast(baseframework):
         # Step 1: QWenVL input format
         qwen_inputs = self.qwen_vl_interface.build_qwenvl_inputs(images=batch_images, instructions=instructions)
 
+        max_new_tokens = int(kwargs.get("max_new_tokens", self.config.framework.get("max_new_tokens", 2048)))
         with torch.autocast("cuda", dtype=torch.bfloat16):
             generated_ids = self.qwen_vl_interface.model.generate(
                 **qwen_inputs,
-                max_length=2048,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
             )
         prompt_length = qwen_inputs["input_ids"].shape[1]
         generated_text = self.qwen_vl_interface.processor.tokenizer.batch_decode(
@@ -237,22 +242,226 @@ class Qwenvl_Fast(baseframework):
             skip_special_tokens=False,
             clean_up_tokenization_spaces=False,
         )
-        # --- Extract and decoder vlm_action to continue actions ---
-        # --- extrace token (index based on VLM) ---
-        batch_vlm_action_token_ids = self._extract_action_token_ids(generated_ids)
-        # --- map index to fast tokenizer index space ---
-        batch_fast_action_token_idx = self._decode_action_tokens(batch_vlm_action_token_ids)
-        empty_indices = [i for i, seq in enumerate(batch_fast_action_token_idx) if not seq]
-        if empty_indices:
-            raise RuntimeError(
-                "QwenFast generation produced no <robot_action_*> tokens for sample indices "
-                f"{empty_indices}. Check that framework.qwenvl.base_vlm is an action-token checkpoint "
-                "and that the model has learned to emit FAST action tokens."
-            )
+        target_fast_tokens = kwargs.get("target_fast_tokens", None)
+        # Only consume action tokens from the generated <action>...</action> block.
+        batch_fast_action_token_idx = self._extract_fast_action_token_ids_from_text(
+            generated_text,
+            target_fast_token_ids=target_fast_tokens,
+        )
+        self._validate_fast_action_token_sequences(
+            batch_fast_action_token_idx,
+            generated_text=generated_text,
+            target_fast_token_ids=target_fast_tokens,
+        )
         # --- decode fast tokenizer index to action semantic ---
         normalized_actions = self.action_model.fast_tokenizer.decode(batch_fast_action_token_idx)
 
         return {"normalized_actions": normalized_actions, "text": generated_text}
+
+    def _validate_fast_action_token_sequences(
+        self,
+        batch_fast_token_ids: List[List[int]],
+        generated_text: Optional[List[str]] = None,
+        target_fast_token_ids: Optional[List[List[int]]] = None,
+    ) -> None:
+        fast_tokenizer = self.action_model.fast_tokenizer
+        bpe_tokenizer = getattr(fast_tokenizer, "bpe_tokenizer", None)
+        if bpe_tokenizer is None:
+            return
+
+        action_dim = int(self.config.framework.action_model.action_dim)
+        time_horizon = int(self.action_horizon)
+        expected_coeff_count = time_horizon * action_dim
+        action_block_pattern = re.compile(r"<action>\s*(.*?)\s*</action>", re.DOTALL)
+        failures = []
+
+        for batch_idx, fast_token_ids in enumerate(batch_fast_token_ids):
+            target_token_ids = (
+                target_fast_token_ids[batch_idx]
+                if target_fast_token_ids is not None and batch_idx < len(target_fast_token_ids)
+                else None
+            )
+            full_text = generated_text[batch_idx] if generated_text is not None and batch_idx < len(generated_text) else None
+            action_text = None
+            if generated_text is not None and batch_idx < len(generated_text):
+                match = action_block_pattern.search(generated_text[batch_idx])
+                action_text = match.group(1) if match is not None else None
+
+            if not fast_token_ids:
+                failures.append(
+                    self._build_fast_decode_failure_detail(
+                        batch_idx=batch_idx,
+                        actual_token_ids=list(fast_token_ids),
+                        actual_coeff_count=0,
+                        target_token_ids=target_token_ids,
+                        action_text=action_text,
+                        generated_text=full_text,
+                    )
+                )
+                continue
+            try:
+                decoded_text = bpe_tokenizer.decode([int(token_id) for token_id in fast_token_ids])
+                coeff_count = len(decoded_text)
+            except Exception:
+                coeff_count = -1
+
+            if coeff_count != expected_coeff_count:
+                failures.append(
+                    self._build_fast_decode_failure_detail(
+                        batch_idx=batch_idx,
+                        actual_token_ids=list(fast_token_ids),
+                        actual_coeff_count=coeff_count,
+                        target_token_ids=target_token_ids,
+                        action_text=action_text,
+                        generated_text=full_text,
+                    )
+                )
+
+        if failures:
+            raise RuntimeError(
+                "QwenFast generation produced invalid FAST action token sequence(s): "
+                f"expected decoded coefficient count {expected_coeff_count} "
+                f"(time_horizon={time_horizon}, action_dim={action_dim}), got {failures}."
+            )
+
+    def _build_fast_decode_failure_detail(
+        self,
+        *,
+        batch_idx: int,
+        actual_token_ids: List[int],
+        actual_coeff_count: int,
+        target_token_ids: Optional[List[int]] = None,
+        action_text: Optional[str] = None,
+        generated_text: Optional[str] = None,
+    ) -> dict:
+        fast_tokenizer = self.action_model.fast_tokenizer
+        bpe_tokenizer = getattr(fast_tokenizer, "bpe_tokenizer", None)
+        generated_text = generated_text or ""
+        action_text = action_text or ""
+        preview_chars = int(self.config.framework.get("fast_decode_failure_preview_chars", 4096))
+        tail_chars = int(self.config.framework.get("fast_decode_failure_tail_chars", 1024))
+
+        def _tail_preview(text: str) -> str:
+            if tail_chars <= 0 or len(text) <= preview_chars:
+                return ""
+            return text[-tail_chars:]
+
+        detail = {
+            "sample": batch_idx,
+            "actual_decoded_coeff_count": actual_coeff_count,
+            "actual_token_count": len(actual_token_ids),
+            "actual_tokens_preview": actual_token_ids[:64],
+            "actual_action_text_char_count": len(action_text),
+            "actual_action_text_preview": action_text[:preview_chars],
+            "actual_action_text_tail_preview": _tail_preview(action_text),
+            "actual_action_text_preview_truncated": len(action_text) > preview_chars,
+            "generated_text_char_count": len(generated_text),
+            "text_preview": generated_text[:preview_chars],
+            "text_tail_preview": _tail_preview(generated_text),
+            "text_preview_truncated": len(generated_text) > preview_chars,
+            "preview_chars": preview_chars,
+        }
+        if target_token_ids is not None:
+            target_coeff_count = None
+            if bpe_tokenizer is not None:
+                try:
+                    target_coeff_count = len(bpe_tokenizer.decode([int(token_id) for token_id in target_token_ids]))
+                except Exception:
+                    target_coeff_count = -1
+            detail.update(
+                {
+                    "target_decoded_coeff_count": target_coeff_count,
+                    "target_token_count": len(target_token_ids),
+                    "target_tokens_preview": target_token_ids[:64],
+                }
+            )
+        return detail
+
+    def _extract_fast_action_token_ids_from_text(
+        self,
+        generated_text: List[str],
+        target_fast_token_ids: Optional[List[List[int]]] = None,
+    ) -> List[List[int]]:
+        """Extract FAST token ids strictly from each generated <action>...</action> block."""
+        action_block_pattern = re.compile(r"<action>\s*(.*?)\s*</action>", re.DOTALL)
+        action_token_pattern = re.compile(r"<robot_action_(\d+)>")
+        fast_vocab_size = self._fast_action_vocab_size()
+
+        batch_fast_token_ids = []
+        failures = []
+        for batch_idx, text in enumerate(generated_text):
+            target_token_ids = (
+                target_fast_token_ids[batch_idx]
+                if target_fast_token_ids is not None and batch_idx < len(target_fast_token_ids)
+                else None
+            )
+            match = action_block_pattern.search(text)
+            if match is None:
+                batch_fast_token_ids.append([])
+                partial_action_text = self._extract_partial_action_text(text)
+                detail = self._build_fast_decode_failure_detail(
+                    batch_idx=batch_idx,
+                    actual_token_ids=[],
+                    actual_coeff_count=0,
+                    target_token_ids=target_token_ids,
+                    action_text=partial_action_text,
+                    generated_text=text,
+                )
+                detail["reason"] = "missing_complete_action_block"
+                detail["has_open_action_tag"] = "<action>" in text
+                detail["has_close_action_tag"] = "</action>" in text
+                failures.append(detail)
+                continue
+
+            action_text = match.group(1)
+            token_ids = [int(value) for value in action_token_pattern.findall(action_text)]
+            invalid_token_ids = [token_id for token_id in token_ids if token_id < 0 or token_id >= fast_vocab_size]
+            if not token_ids:
+                detail = self._build_fast_decode_failure_detail(
+                    batch_idx=batch_idx,
+                    actual_token_ids=[],
+                    actual_coeff_count=0,
+                    target_token_ids=target_token_ids,
+                    action_text=action_text,
+                    generated_text=text,
+                )
+                detail["reason"] = "empty_action_block"
+                failures.append(detail)
+            elif invalid_token_ids:
+                detail = self._build_fast_decode_failure_detail(
+                    batch_idx=batch_idx,
+                    actual_token_ids=token_ids,
+                    actual_coeff_count=-1,
+                    target_token_ids=target_token_ids,
+                    action_text=action_text,
+                    generated_text=text,
+                )
+                detail.update(
+                    {
+                        "reason": "action_token_out_of_range",
+                        "invalid_token_ids": invalid_token_ids[:16],
+                        "fast_vocab_size": fast_vocab_size,
+                    }
+                )
+                failures.append(detail)
+
+            batch_fast_token_ids.append(token_ids)
+
+        if failures:
+            raise RuntimeError(
+                "QwenFast generation produced invalid <action> block(s) while extracting FAST tokens: "
+                f"{failures}."
+            )
+
+        return batch_fast_token_ids
+
+    @staticmethod
+    def _extract_partial_action_text(text: str) -> str:
+        text = str(text or "")
+        start = text.find("<action>")
+        if start < 0:
+            return ""
+        return text[start + len("<action>") :]
 
     def _extract_action_token_ids(
         self,

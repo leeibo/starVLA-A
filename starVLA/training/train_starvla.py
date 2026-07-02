@@ -375,21 +375,33 @@ class VLATrainer(TrainerUtils):
         examples = self._get_next_batch()
         actions = [example["action"] for example in examples]
         try:
-            output_dict = self.accelerator.unwrap_model(self.model).predict_action(
-                examples=examples, use_ddim=True, num_ddim_steps=20
+            unwrapped_model = self.accelerator.unwrap_model(self.model)
+            target_fast_tokens = None
+            action_model = getattr(unwrapped_model, "action_model", None)
+            if action_model is not None and hasattr(action_model, "encoder_action2fastoken"):
+                target_fast_tokens = action_model.encoder_action2fastoken(actions)
+            output_dict = unwrapped_model.predict_action(
+                examples=examples,
+                use_ddim=True,
+                num_ddim_steps=20,
+                target_fast_tokens=target_fast_tokens,
             )
         except RuntimeError as exc:
-            if "produced no <robot_action_*>" not in str(exc):
+            msg = str(exc)
+            decode_failure = (
+                "produced no <robot_action_*>" in msg
+                or "invalid FAST action token sequence" in msg
+                or "invalid <action> block" in msg
+            )
+            if not decode_failure:
                 raise
             if self.accelerator.is_main_process:
                 step_metrics["eval/action_decode_failed"] = 1.0
-                if not getattr(self, "_warned_action_eval_decode_failure", False):
-                    logger.warning(
-                        "Skipping action eval because generation produced no FAST action tokens. "
-                        "This can happen before the model learns to emit action tokens from a "
-                        "tokenizer-expanded *-Action checkpoint."
-                    )
-                    self._warned_action_eval_decode_failure = True
+                logger.warning(
+                    "Skipping action eval because generation produced invalid FAST action tokens. "
+                    "This can happen before the model learns to emit complete decodeable action chunks."
+                )
+                logger.warning(f"Action eval decode failure detail: {msg}")
             del examples
             dist.barrier()
             return step_metrics
