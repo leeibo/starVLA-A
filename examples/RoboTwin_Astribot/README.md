@@ -15,6 +15,17 @@ Astribot-specific contents:
 - `train_files/managed_runs/fast_subtask_action_6_ws/`: managed 6-history-frame QwenFastState run with state tokens.
 - `train_files/managed_runs/fast_subtask_no_0_wos/`: managed 0-history-frame QwenFast run.
 - `train_files/managed_runs/fast_subtask_no_0_ws/`: managed 0-history-frame QwenFastState run with state tokens.
+- `train_files/managed_runs/oft_no_no_0_wos/`: managed pure QwenOFT run without VLM think supervision.
+- `train_files/managed_runs/oft_subtask_no_0_ws/`: managed QwenOFTState cotrain run with subtask think supervision and state.
+- `train_files/managed_runs/oft_no_action_12_ws/`: QwenOFTState, no VLM cotrain branch, action history 12, with state.
+- `train_files/managed_runs/oft_instruction_action_12_ws/`: QwenOFTState cotrain, VLM think supervised by task instruction, action history 12, with state.
+- `train_files/managed_runs/oft_subtask_action_12_wos/`: QwenOFT cotrain, VLM think supervised by subtask, action history 12, without state.
+- `train_files/managed_runs/oft_subtask_action_12_ws/`: QwenOFTState cotrain, VLM think supervised by subtask, action history 12, with state.
+- `train_files/managed_runs/oft_subtask_motion_12_ws/`: QwenOFTState cotrain, VLM think supervised by subtask, motion history 12, with state.
+- `train_files/managed_runs/oft_subtask_subtask_12_ws/`: QwenOFTState cotrain, VLM think supervised by subtask, subtask history 12, with state.
+- `train_files/managed_runs/oft_subtask_action_6_ws/`: QwenOFTState cotrain, VLM think supervised by subtask, action history 6, with state.
+- `train_files/managed_runs/oft_subtask_motion_6_ws/`: QwenOFTState cotrain, VLM think supervised by subtask, motion history 6, with state.
+- `train_files/managed_runs/oft_subtask_subtask_6_ws/`: QwenOFTState cotrain, VLM think supervised by subtask, subtask history 6, with state.
 
 ## 4-GPU training notes
 
@@ -24,7 +35,9 @@ pattern and initializes from the 12-frame checkpoint. `fast_subtask_action_6_ws`
 uses `QwenFastState` and conditions on one state token per input frame. Use the
 `starVLA` conda environment. `fast_subtask_no_0_wos` disables history entirely
 and uses only the current image. `fast_subtask_no_0_ws` is the matching
-no-history state-token run.
+no-history state-token run. `oft_no_no_0_wos` is the pure OFT baseline, and
+`oft_subtask_no_0_ws` adds the VLM `<think>` cotrain branch with subtask
+supervision plus VLA state conditioning through `QwenOFTState`.
 
 The default base VLM is:
 
@@ -146,6 +159,42 @@ Start its inference server:
 
 ```bash
 bash examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_no_0_ws/run_policy_server.sh
+```
+
+Pure OFT no-history no-state run:
+
+```bash
+bash examples/RoboTwin_Astribot/train_files/managed_runs/oft_no_no_0_wos/run_train.sh
+```
+
+Queue the pure OFT run through `yhbatch`:
+
+```bash
+yhbatch examples/RoboTwin_Astribot/train_files/managed_runs/oft_no_no_0_wos/submit_yhbatch.sh
+```
+
+Start its inference server:
+
+```bash
+bash examples/RoboTwin_Astribot/train_files/managed_runs/oft_no_no_0_wos/run_policy_server.sh
+```
+
+OFT subtask-think no-history state run:
+
+```bash
+bash examples/RoboTwin_Astribot/train_files/managed_runs/oft_subtask_no_0_ws/run_train.sh
+```
+
+Queue the OFT subtask-think state run through `yhbatch`:
+
+```bash
+yhbatch examples/RoboTwin_Astribot/train_files/managed_runs/oft_subtask_no_0_ws/submit_yhbatch.sh
+```
+
+Start its inference server:
+
+```bash
+bash examples/RoboTwin_Astribot/train_files/managed_runs/oft_subtask_no_0_ws/run_policy_server.sh
 ```
 
 Smoke test:

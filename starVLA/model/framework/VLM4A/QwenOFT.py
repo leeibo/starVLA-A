@@ -38,7 +38,7 @@ logger = initialize_overwatch(__name__)
 IGNORE_INDEX = -100
 
 from starVLA.model.framework.base_framework import baseframework
-from starVLA.model.framework.share_tools import add_discretized_state_to_instruction, merge_framework_config
+from starVLA.model.framework.share_tools import merge_framework_config
 from starVLA.model.modules.action_model.MLP_ActionHeader import get_action_model
 from starVLA.model.modules.vlm import get_vlm_model
 from starVLA.training.trainer_utils.trainer_tools import resize_images
@@ -86,7 +86,6 @@ class QwenOFTDefaultConfig:
             "past_action_window_size": 0,
         }
     )
-
 
 @FRAMEWORK_REGISTRY.register("QwenOFT")
 class Qwenvl_OFT(baseframework):
@@ -160,26 +159,22 @@ class Qwenvl_OFT(baseframework):
                 action_loss (torch.Tensor): Scalar diffusion noise prediction loss.
         """
         batch_images = [example["image"] for example in examples]  #  [B，[PLT]]
-        instructions = [example["lang"] for example in examples]  # [B, str]
+        instructions = [self._select_prompt_instruction(example) for example in examples]  # [B, str]
         actions = [example["action"] for example in examples]  # label [B， len, 7]
-        state = (
-            [example["state"] for example in examples] if "state" in examples[0] else None
-        )  # List[ndarray (1, state_dim)] or None
 
-        # Optionally prepend discretised proprioceptive state tokens to each instruction (π₀.5 style).
-        instructions = (
-            self.add_discretized_state_to_instruction(instructions, state) if state is not None else instructions
-        )
-
-        # step 0: add special action token to instruction
-        action_tokens = (
-            self.action_token * self.chunk_len
-        )  # can't add " " between two tokens, otherwise will be tokenized to multiple tokens
-        prompt_suffix = f" Please predict the next {self.chunk_len} robot actions: <action>{action_tokens}<action>."
-        instructions = [instruction + prompt_suffix for instruction in instructions]
+        # Append only OFT action-query tokens after the full user prompt. The
+        # natural-language prompt itself is defined by datasets.vla_data.CoT_prompt.
+        action_tokens = self.action_token * self.chunk_len
+        # Do not prefix a space: Qwen3 tokenizes " 🔍" differently and the
+        # first action query would not match ``self.action_token_id``.
+        prompt_suffixes = [action_tokens for _ in instructions]
 
         # Step 1: QWenVL input format
-        qwen_inputs = self.qwen_vl_interface.build_qwenvl_inputs(images=batch_images, instructions=instructions)
+        qwen_inputs = self.qwen_vl_interface.build_qwenvl_inputs(
+            images=batch_images,
+            instructions=instructions,
+            prompt_suffixes=prompt_suffixes,
+        )
         with torch.autocast("cuda", dtype=torch.bfloat16):
             qwenvl_outputs = self.qwen_vl_interface(
                 **qwen_inputs,
@@ -230,29 +225,25 @@ class Qwenvl_OFT(baseframework):
         if type(examples) is not list:
             examples = [examples]
         batch_images = [to_pil_preserve(example["image"]) for example in examples]  #  [B，[PLT]]
-        instructions = [example["lang"] for example in examples]  # [B, str]
-        state = (
-            [example["state"] for example in examples] if "state" in examples[0] else None
-        )  # List[ndarray (1, state_dim)] or None
-
-        # Optionally prepend discretised proprioceptive state tokens to each instruction (π₀.5 style).
-        instructions = (
-            self.add_discretized_state_to_instruction(instructions, state) if state is not None else instructions
-        )
+        instructions = [self._select_prompt_instruction(example) for example in examples]  # [B, str]
 
         train_obs_image_size = getattr(self.config.datasets.vla_data, "obs_image_size", None)
         if train_obs_image_size:
             batch_images = resize_images(batch_images, target_size=train_obs_image_size)
 
-        # step 0: add special action token to instruction
-        action_tokens = (
-            self.action_token * self.chunk_len
-        )  # can't add " " between two tokens, otherwise will be tokenized to multiple tokens
-        prompt_suffix = f" Please predict the next {self.chunk_len} robot actions: <action>{action_tokens}<action>."
-        instructions = [instruction + prompt_suffix for instruction in instructions]
+        # Append only OFT action-query tokens after the full user prompt. The
+        # natural-language prompt itself is defined by datasets.vla_data.CoT_prompt.
+        action_tokens = self.action_token * self.chunk_len
+        # Do not prefix a space: Qwen3 tokenizes " 🔍" differently and the
+        # first action query would not match ``self.action_token_id``.
+        prompt_suffixes = [action_tokens for _ in instructions]
 
         # Step 1: QWenVL input format
-        qwen_inputs = self.qwen_vl_interface.build_qwenvl_inputs(images=batch_images, instructions=instructions)
+        qwen_inputs = self.qwen_vl_interface.build_qwenvl_inputs(
+            images=batch_images,
+            instructions=instructions,
+            prompt_suffixes=prompt_suffixes,
+        )
         with torch.autocast("cuda", dtype=torch.bfloat16):
             qwenvl_outputs = self.qwen_vl_interface(
                 **qwen_inputs,
@@ -329,9 +320,61 @@ class Qwenvl_OFT(baseframework):
         action_queries = last_hidden.gather(dim=1, index=expanded_index)  # [B, chunk_len, H]
         return action_queries
 
-    # Discretised state → instruction prefix (π₀.5 style); shared with QwenPI_v3.
-    add_discretized_state_to_instruction = staticmethod(add_discretized_state_to_instruction)
+    def _vla_data_cfg_get(self, key: str, default=None):
+        datasets_cfg = getattr(self.config, "datasets", None)
+        vla_data_cfg = getattr(datasets_cfg, "vla_data", None) if datasets_cfg is not None else None
+        if vla_data_cfg is None:
+            return default
+        if hasattr(vla_data_cfg, "get"):
+            return vla_data_cfg.get(key, default)
+        return getattr(vla_data_cfg, key, default)
 
+    def _oft_instruction_cfg_get(self, key: str, default=None):
+        instruction_cfg = self._vla_data_cfg_get("oft_instruction", None)
+        if instruction_cfg is not None:
+            if hasattr(instruction_cfg, "get"):
+                value = instruction_cfg.get(key, None)
+            else:
+                value = getattr(instruction_cfg, key, None)
+            if value is not None:
+                return value
+        return self._vla_data_cfg_get(f"oft_instruction_{key}", default)
+
+    @staticmethod
+    def _first_example_text(example: dict, candidate_keys: List[str]) -> Optional[str]:
+        for key in candidate_keys:
+            if not key:
+                continue
+            value = example.get(key, None)
+            if value is not None and value != "":
+                return str(value)
+        return None
+
+    def _select_prompt_instruction(self, example: dict) -> str:
+        source = str(
+            self._oft_instruction_cfg_get(
+                "source",
+                self._oft_instruction_cfg_get("instruction_source", "instruction"),
+            )
+        ).lower()
+        configured_key = self._oft_instruction_cfg_get(
+            "key",
+            self._oft_instruction_cfg_get("instruction_key", None),
+        )
+        subtask_instruction = self._first_example_text(
+            example,
+            [configured_key, "subtask_lang", "subtask_instruction", "subtask"],
+        )
+        task_instruction = self._first_example_text(example, ["task_lang", "lang"]) or ""
+
+        if source in {"subtask", "subtask_instruction", "subtask_lang"}:
+            return subtask_instruction or task_instruction
+        if source in {"auto", "subtask_or_instruction", "subtask_instruction_or_instruction"}:
+            return subtask_instruction or task_instruction
+        if source in {"instruction", "task", "task_instruction", "lang"}:
+            return task_instruction
+        custom_instruction = self._first_example_text(example, [source, configured_key])
+        return custom_instruction or task_instruction
 
 if __name__ == "__main__":
     import argparse
@@ -365,7 +408,6 @@ if __name__ == "__main__":
         "action": np.random.uniform(-1, 1, size=(16, 7)).astype(np.float16),
         "image": [image],
         "lang": "This is a fake instruction for testing.",
-        "state": np.random.uniform(-1, 1, size=(1, 7)).astype(np.float16),  # chunk, state_dim
     }
     sample2 = sample.copy()
     sample2["lang"] = "Another fake instruction for testing."
@@ -375,17 +417,10 @@ if __name__ == "__main__":
     model = model.to(device)
     forward_output = model(batch)
     action_loss = forward_output["action_loss"]
-    print(f"[train] Action Loss (with state): {action_loss.item()}")
+    print(f"[train] Action Loss: {action_loss.item()}")
 
     predict_output = model.predict_action(examples=[batch[0]])
     normalized_actions = predict_output["normalized_actions"]
     print(f"[infer] Predicted Action shape: {normalized_actions.shape}")
-
-    # Backward-compat: examples without `state` should still work.
-    sample_no_state = {k: v for k, v in sample.items() if k != "state"}
-    forward_no_state = model([sample_no_state, sample_no_state])
-    print(f"[train] Action Loss (no state): {forward_no_state['action_loss'].item()}")
-    predict_no_state = model.predict_action(examples=[sample_no_state])
-    print(f"[infer] Predicted Action shape (no state): {predict_no_state['normalized_actions'].shape}")
 
     print("Finished")

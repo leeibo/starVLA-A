@@ -12,7 +12,15 @@
 - `think_level`: `<think>` 中监督使用的指令级别。`total` 表示总任务 instruction，`subtask` 表示 subtask instruction。
 - `history_keyframe`: 历史帧来源。`action` 表示 `action_keyframe`，`motion` 表示 `motion_keyframe`，`subtask` 表示 `subtask_keyframe`，`no` 表示不使用历史帧。
 - `memory_length`: 历史帧数量上限。数字表示最多使用对应数量的历史帧，`ultra` 表示不限制历史帧数量。
-- `state_flag`: 是否使用本体状态。`wos` 表示 without state，对应 `QwenFast`；`ws` 表示 with state，对应 `QwenFastState`。
+- `state_flag`: 是否使用本体状态。FAST 训练族中 `wos` 对应 `QwenFast`、`ws` 对应 `QwenFastState`；OFT 训练族中 `wos` 对应 `QwenOFT`、`ws` 对应 `QwenOFTState`。
+
+OFT 训练族使用同一命名结构，但第二字段表示 VLM cotrain 分支：
+
+- `oft_no_*`: 不启用 VLM branch co-training，只训练 OFT action 回归。
+- `oft_instruction_*`: 启用 VLM branch co-training，VLM 输出用总任务 instruction 监督。
+- `oft_subtask_*`: 启用 VLM branch co-training，VLM 输出用 subtask instruction 监督。
+- OFT action 分支的 prompt 统一用总任务 instruction 构造；`instruction/subtask/no` 不改变 action 分支 prompt。
+- `oft_*_ws` 使用 `QwenOFTState`，每张输入图片对应一个 state soft token；`oft_*_wos` 使用 plain `QwenOFT`。
 
 示例：
 

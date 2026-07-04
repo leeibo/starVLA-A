@@ -106,4 +106,5 @@ DATASET_NAMED_MIXTURES = {
         ("place_a2b_left_rotate_view", 1.0, "robotwin_astribot"),
         ("place_a2b_right_rotate_view", 1.0, "robotwin_astribot"),
     ],
+    "robotwin_astribot_long": [("rank_backside_rgb_blocks", 1.0, "robotwin_astribot")],
 }

@@ -2710,6 +2710,53 @@ class LeRobotMixtureDataset(Dataset):
             dataset_descriptions.append(dataset_description)
         return json.dumps({"Mixture dataset": dataset_descriptions}, indent=2)
 
+    def _data_cfg_get(self, key: str, default=None):
+        if self.data_cfg is None:
+            return default
+        if hasattr(self.data_cfg, "get"):
+            return self.data_cfg.get(key, default)
+        return getattr(self.data_cfg, key, default)
+
+    def _history_cfg_get(self, key: str, default=None):
+        history_cfg = self._data_cfg_get("history", None)
+        if history_cfg is not None:
+            if hasattr(history_cfg, "get"):
+                value = history_cfg.get(key, None)
+            else:
+                value = getattr(history_cfg, key, None)
+            if value is not None:
+                return value
+        return self._data_cfg_get(f"history_{key}", default)
+
+    def _requires_full_history(self) -> bool:
+        value = self._history_cfg_get("require_full_frames", False)
+        if isinstance(value, str):
+            return value.lower() in {"1", "true", "yes", "y"}
+        return bool(value)
+
+    def _history_mode(self) -> str:
+        return str(self._history_cfg_get("mode", "action_keyframe"))
+
+    def _history_stride(self) -> int:
+        value = self._history_cfg_get("stride", 1)
+        stride = int(value)
+        return stride if stride > 0 else 1
+
+    def _max_history_frames(self) -> int | None:
+        value = self._history_cfg_get("max_frames", self._history_cfg_get("max_history_frames", None))
+        if value in (None, "", "none", "None", "null", "Null", -1):
+            return None
+        value = int(value)
+        return None if value < 0 else value
+
+    def _sample_has_required_history(self, sample: dict) -> bool:
+        if not self._requires_full_history():
+            return True
+        max_frames = self._max_history_frames()
+        if max_frames is None:
+            return True
+        return int(sample.get("num_history_frames", 0)) >= max_frames
+
     def set_epoch(self, epoch: int):
         """Set the epoch for the dataset.
 
@@ -2738,7 +2785,16 @@ class LeRobotMixtureDataset(Dataset):
         trajectory_id = dataset.trajectory_ids[trajectory_index]
 
         # Sample step
-        base_index = rng.choice(dataset.trajectory_lengths[trajectory_index])
+        trajectory_length = int(dataset.trajectory_lengths[trajectory_index])
+        if self._requires_full_history() and self._history_mode() == "action_keyframe":
+            max_history = self._max_history_frames()
+            min_base_index = self._history_stride() * int(max_history or 0)
+            if trajectory_length > min_base_index:
+                base_index = rng.integers(min_base_index, trajectory_length)
+            else:
+                base_index = rng.choice(trajectory_length)
+        else:
+            base_index = rng.choice(trajectory_length)
         return dataset, trajectory_id, base_index
 
     
@@ -2775,20 +2831,21 @@ class LeRobotMixtureDataset(Dataset):
                     # If dataset has no physical videos (e.g., image frames in parquet
                     # for VLA-Arena), do not gate sampling on mp4 existence.
                     total_videos = int(dataset.lerobot_info_meta.get("total_videos", 0))
-                    if total_videos == 0:
-                        break
+                    if total_videos > 0:
+                        key = dataset.modality_keys["video"][0].replace("video.", "")
+                        video_path = dataset.get_video_path(trajectory_id, key)
+                        if not os.path.exists(video_path):
+                            index = random.randint(0, len(self) - 1)
+                            continue
 
-                    key = dataset.modality_keys["video"][0].replace("video.", "")
-                    video_path = dataset.get_video_path(trajectory_id, key)
-                    if os.path.exists(video_path):
-                        break
-                    index = random.randint(0, len(self) - 1)
-                    
-                raw_data = dataset.get_step_data(trajectory_id, step)    
-                data = dataset.transforms(raw_data)
-                sample = dataset._pack_sample(data, trajectory_id=trajectory_id, base_index=step)
-                
-                return sample
+                    raw_data = dataset.get_step_data(trajectory_id, step)
+                    data = dataset.transforms(raw_data)
+                    sample = dataset._pack_sample(data, trajectory_id=trajectory_id, base_index=step)
+                    if not self._sample_has_required_history(sample):
+                        index = random.randint(0, len(self) - 1)
+                        continue
+
+                    return sample
                 
             except Exception as e:
                 last_exception = e

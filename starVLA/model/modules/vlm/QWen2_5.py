@@ -249,8 +249,12 @@ class _QWen_VL_Interface(nn.Module):
         # Create messages: one message per sample
         messages = []
         prompt_messages = []
+        prompt_suffixes = kwargs.get("prompt_suffixes", None)
+        if prompt_suffixes is not None:
+            assert len(prompt_suffixes) == len(instructions), "Prompt suffixes and instructions must have the same length"
+
         assert len(images) == len(instructions), "Images and instructions must have the same length"
-        for imgs, instruction in zip(images, instructions):
+        for sample_idx, (imgs, instruction) in enumerate(zip(images, instructions)):
             content = [{"type": "image", "image": img} for img in imgs]
 
             if "CoT_prompt" in self.config.datasets.vla_data:  # If using a grounding prompt to task
@@ -258,6 +262,8 @@ class _QWen_VL_Interface(nn.Module):
                 prompt = CoT_prompt.replace("{instruction}", instruction)
             else:
                 prompt = instruction
+            if prompt_suffixes is not None:
+                prompt = f"{prompt}{prompt_suffixes[sample_idx]}"
 
             content.append({"type": "text", "text": prompt})
             prompt_messages.append([{"role": "user", "content": content}])

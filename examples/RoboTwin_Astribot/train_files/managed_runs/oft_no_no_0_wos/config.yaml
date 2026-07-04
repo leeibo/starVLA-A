@@ -1,0 +1,57 @@
+run_id: oft_no_no_0_wos
+run_root_dir: results/Checkpoints
+seed: 42
+wandb_entity: leeibo-beihang-university
+wandb_project: starVLA-RoboTwin-Astribot
+is_debug: false
+version_id: "0.21"
+
+framework:
+  name: QwenOFT
+  qwenvl:
+    base_vlm: ./playground/Pretrained_models/Qwen3-VL-2B-Instruct
+    attn_implementation: flash_attention_2
+
+  action_model:
+    action_model_type: MLP
+    action_dim: 18
+    action_horizon: 16
+
+datasets:
+  vla_data:
+    dataset_py: lerobot_datasets
+    data_root_dir: playground/dataset/RoboTwin_Astribot_lerobot
+    data_mix: robotwin_astribot
+    include_state: false
+    action_mode: abs
+    per_device_batch_size: 16
+    video_backend: torchvision_av
+    CoT_prompt: 'Your task is: "{instruction}" The input images are ordered from earliest to latest, and the last image is the current view. Please think about the next action.'
+    oft_instruction:
+      source: instruction
+      key: lang
+    history:
+      enabled: false
+      max_frames: 0
+
+trainer:
+  is_resume: false
+  max_train_steps: 100000
+  num_warmup_steps: 5000
+  save_interval: 5000
+  eval_interval: 500
+  learning_rate:
+    base: 1e-05
+    qwen_vl_interface: 1.0e-05
+    action_model: 1.0e-04
+  lr_scheduler_type: cosine_with_min_lr
+  scheduler_specific_kwargs:
+    min_lr: 5.0e-07
+  freeze_modules: ''
+  logging_frequency: 10
+  gradient_clipping: 1.0
+
+  optimizer:
+    betas: [0.9, 0.95]
+    eps: 1.0e-08
+    weight_decay: 1.0e-08

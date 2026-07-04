@@ -23,6 +23,16 @@
 - `history.max_frames: null` 表示不限制历史帧；数字表示最多使用对应数量的历史帧，不含当前帧。
 - 0-history 训练使用 `history.enabled: false` 和 `history.max_frames: 0`；不要只写 `history.max_frames: 0` 同时保持 history enabled，因为 action-keyframe 逻辑仍可能采到一个历史帧。
 
+## OFT VLA / Cotrain 配置要点
+
+- `framework.name: QwenOFT` 使用 plain Qwen-VL checkpoint 和 MLP action head，不使用 FAST `<robot_action_*>` token 监督，也不接收 state 输入。
+- `framework.name: QwenOFTState` 是 OFT 的 state 版本；`datasets.vla_data.include_state: true`，并添加 `framework.state_model`。state 不写进 prompt 文本，而是经过 MLP 投到 Qwen hidden size，作为每张输入图片对应的一个 soft token 插入到 prompt embedding 后、OFT action query token 前。
+- OFT action 分支的 prompt 统一使用总任务 instruction 构造，配置为 `datasets.vla_data.oft_instruction.source: instruction`。
+- `oft_no_*` run 使用 `starVLA/training/train_starvla.py`，不配置 `datasets.vlm_data`，表示不启用 VLM branch co-training。
+- `oft_instruction_*` 和 `oft_subtask_*` run 使用 `starVLA/training/train_starvla_cotrain.py`，需要同时配置 `datasets.vla_data` 和 `datasets.vlm_data`。
+- Cotrain run 中 `datasets.vlm_data.CoT_prompt` 必须与 `datasets.vla_data.CoT_prompt` 保持一致；两边只通过监督答案来源区分 `instruction/subtask`。
+- VLM branch 的监督来源由 `datasets.vlm_data.think_answer.instruction_source` 控制：`instruction` 表示总任务 instruction，`subtask_instruction` 表示 subtask instruction。
+
 ## run_train.sh 检查项
 
 - 默认只传 `--config_yaml` 给 `train_starvla.py`。

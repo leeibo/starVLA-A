@@ -21,6 +21,101 @@ Notes:
 - Remaining risk, assumptions, or follow-up
 ```
 
+## 2026-07-04 - OFT Prompt/History Managed Runs
+
+Scope:
+- `examples/RoboTwin_Astribot/train_files/managed_runs/oft_no_action_12_ws/`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/oft_instruction_action_12_ws/`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/oft_subtask_action_12_wos/`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/oft_subtask_motion_12_ws/`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/oft_subtask_subtask_12_ws/`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/oft_subtask_motion_6_ws/`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/oft_subtask_subtask_6_ws/`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/oft_subtask_action_12_ws/`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/oft_subtask_action_6_ws/`
+- `starVLA/model/framework/VLM4A/QwenOFT.py`
+- `starVLA/model/framework/VLM4A/QwenOFTState.py`
+- `examples/RoboTwin_Astribot/README.md`
+
+Changes:
+- Added OFT managed runs for no-cotrain/task-cotrain/subtask-cotrain variants, action/motion/subtask history keyframes, 6/12 history lengths, and with/without state variants requested for Astribot.
+- Kept all new runs on plain `Qwen3-VL-2B-Instruct`, because `QwenOFT` uses MLP regression over query tokens instead of FAST `<robot_action_*>` token supervision.
+- Set conservative `per_device_batch_size: 1` for the history-heavy OFT runs.
+- Kept the OFT action branch prompt source fixed to total task instruction through `datasets.vla_data.oft_instruction.source: instruction`.
+- Configured `oft_no_action_12_ws` to use `train_starvla.py` without `datasets.vlm_data`, so it does not run the VLM cotrain branch.
+- Configured `oft_instruction_*` and `oft_subtask_*` runs to use `train_starvla_cotrain.py` with LeRobot-backed VLM think supervision.
+- Set VLM branch supervision through `datasets.vlm_data.think_answer.instruction_source`: `instruction` for `oft_instruction_*`, `subtask_instruction` for `oft_subtask_*`.
+- Matched `datasets.vlm_data.CoT_prompt` to `datasets.vla_data.CoT_prompt` in cotrain runs so the VLM and VLA branches receive the same user prompt wording.
+- Kept plain `QwenOFT` as the no-state OFT implementation and added `QwenOFTState` for `*_ws` runs.
+- `QwenOFTState` projects each frame-aligned state vector through an MLP to one Qwen soft token and inserts those tokens after prompt embeddings and before OFT action-query tokens.
+- Reused the managed-run launcher, `yhbatch`, policy-server, and README layout required by the training config docs.
+
+Validation:
+- `bash -n` for `run_train.sh`, `submit_yhbatch.sh`, and `run_policy_server.sh` in all nine requested managed runs.
+- Parsed all nine `config.yaml` files with `OmegaConf` and verified run id, state flag, framework name, history mode, history length, and OFT instruction source.
+- Verified each cotrain run has identical `datasets.vlm_data.CoT_prompt` and `datasets.vla_data.CoT_prompt`.
+- `conda run -n starVLA python -m py_compile starVLA/model/framework/VLM4A/QwenOFT.py starVLA/model/framework/VLM4A/QwenOFTState.py`
+- Built one `robotwin_astribot_task1` sample for action, motion, and subtask history modes.
+- Verified OFT prompt-source selection returns task instruction for the requested OFT action runs.
+
+Notes:
+- OFT run names use the second field for cotrain semantics: `no` = no VLM cotrain branch, `instruction` = VLM branch supervised by total task instruction, `subtask` = VLM branch supervised by subtask instruction.
+
+## 2026-07-04 - Managed Run oft_subtask_no_0_ws
+
+Scope:
+- `examples/RoboTwin_Astribot/train_files/managed_runs/oft_subtask_no_0_ws/`
+- `starVLA/dataloader/vlm_datasets.py`
+- `starVLA/model/framework/share_tools.py`
+- `examples/RoboTwin_Astribot/README.md`
+
+Changes:
+- Added an OFT cotrain managed run for RoboTwin Astribot.
+- Set `run_id: oft_subtask_no_0_ws`.
+- Enabled VLA state input through `datasets.vla_data.include_state: true`.
+- Disabled history frames for both VLA and VLM branches.
+- Added a LeRobot-backed VLM think-supervision dataloader path for Astribot, avoiding a generated static JSON file.
+- Configured the VLM branch to supervise `<think>Frames: ... Now the task is "{subtask_lang}"</think>`.
+- Set the run launcher to use `starVLA/training/train_starvla_cotrain.py`.
+- Removed the leading space before QwenOFT action-query tokens so Qwen3 tokenizes all 16 query markers as the configured action token.
+- Updated checkpoint config loading to prefer `config.full.yaml` when present, because eval needs prompt/data fields that may be omitted from the accessed-only `config.yaml`.
+
+Validation:
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/oft_subtask_no_0_ws/run_train.sh`
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/oft_subtask_no_0_ws/submit_yhbatch.sh`
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/oft_subtask_no_0_ws/run_policy_server.sh`
+- Parsed `config.yaml` with `OmegaConf`.
+- `conda run -n starVLA python -m py_compile starVLA/dataloader/vlm_datasets.py`
+- Built one `robotwin_astribot_task1` VLM think batch with the new LeRobot-backed dataloader.
+- Ran a one-step `oft_subtask_no_0_ws` cotrain smoke test on one A800 with task1 overrides.
+- Loaded the smoke checkpoint through the policy wrapper and ran one eval-style `predict_action`.
+- `git diff --check`.
+
+## 2026-07-03 - Managed Run oft_no_no_0_wos
+
+Scope:
+- `examples/RoboTwin_Astribot/train_files/managed_runs/oft_no_no_0_wos/`
+- `starVLA/model/framework/VLM4A/QwenOFT.py`
+- `starVLA/model/modules/vlm/QWen3.py`
+- `starVLA/model/modules/vlm/QWen2_5.py`
+
+Changes:
+- Added a pure `QwenOFT` managed run for RoboTwin Astribot.
+- Set `run_id: oft_no_no_0_wos`.
+- Disabled VLM think supervision, history frames, and state input.
+- Set the base VLM to plain `Qwen3-VL-2B-Instruct` instead of the FAST `*-Action` checkpoint.
+- Changed QwenOFT prompt assembly so the configured `CoT_prompt` remains the natural-language prompt and OFT action-query tokens are appended after the full prompt without `<action>` tags.
+- Added optional `prompt_suffixes` support to Qwen3/Qwen2.5 VLM input builders.
+- Updated the OFT prompt wording to describe image order as earliest-to-latest with the last image as the current view.
+- Reused the RoboTwin Astribot LeRobot data mix and no-history managed-run script layout.
+
+Validation:
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/oft_no_no_0_wos/run_train.sh`
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/oft_no_no_0_wos/submit_yhbatch.sh`
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/oft_no_no_0_wos/run_policy_server.sh`
+- Parsed `config.yaml` with `OmegaConf`.
+- `git diff --check`.
+
 ## 2026-07-02 - fast_subtask_action_6_wos_test1 Fresh Start
 
 Scope:

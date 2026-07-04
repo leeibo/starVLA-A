@@ -19,6 +19,7 @@ from omegaconf import OmegaConf
 from transformers.image_utils import load_image
 from starVLA.dataloader.qwenvl_llavajson.qwen_data_config import data_list
 from starVLA.dataloader.qwenvl_llavajson.rope2d import get_rope_index_25, get_rope_index_2, get_rope_index_3
+from starVLA.model.modules.vlm.chat_label_utils import mask_labels_to_response
 
 IGNORE_INDEX = -100
 IMAGE_TOKEN_INDEX = 151655
@@ -241,6 +242,83 @@ def preprocess_qwen_visual(
     full_result["labels"] = labels
     full_result["input_ids"] = input_ids
     return full_result
+
+
+def preprocess_qwen_messages(
+    messages,
+    processor,
+    response_text: str | None = None,
+) -> Dict:
+    """Tokenize one already-built Qwen-VL chat and mask labels to the answer."""
+    full_result = processor.apply_chat_template(
+        messages,
+        tokenize=True,
+        return_dict=True,
+        return_tensors="pt",
+    )
+
+    input_ids = full_result["input_ids"]
+    if isinstance(input_ids, list):
+        input_ids = torch.tensor(input_ids).unsqueeze(0)
+        full_result["input_ids"] = input_ids
+
+    if response_text is None:
+        full_result["labels"] = torch.full_like(input_ids, IGNORE_INDEX)
+    else:
+        full_result["labels"] = mask_labels_to_response(
+            full_result,
+            processor.tokenizer,
+            prompt_texts=[""],
+            ignore_index=IGNORE_INDEX,
+            response_texts=[response_text],
+        )
+    return full_result
+
+
+def _select_lerobot_instruction(sample: Dict[str, Any], source: str, key: str | None = None) -> str:
+    if key and sample.get(key):
+        return str(sample[key])
+
+    source = str(source or "instruction")
+    if source in {"subtask", "subtask_instruction", "subtask_lang"}:
+        return str(sample.get("subtask_lang") or sample.get("subtask_instruction") or sample.get("subtask") or sample["lang"])
+    if source in {"auto", "subtask_or_instruction", "subtask_instruction_or_instruction"}:
+        return str(sample.get("subtask_lang") or sample.get("subtask_instruction") or sample.get("subtask") or sample["lang"])
+    return str(sample["lang"])
+
+
+def _add_qwen_position_ids(data_dict: Dict[str, torch.Tensor], processor, get_rope_index, merge_size: int) -> Dict[str, torch.Tensor]:
+    seq_len = data_dict["input_ids"][0].size(0)
+
+    if "image_grid_thw" in data_dict:
+        grid_thw = data_dict.get("image_grid_thw")
+        if not isinstance(grid_thw, Sequence):
+            grid_thw = [grid_thw]
+    else:
+        grid_thw = None
+
+    if "video_grid_thw" in data_dict:
+        video_grid_thw = data_dict.get("video_grid_thw")
+        if not isinstance(video_grid_thw, Sequence):
+            video_grid_thw = [video_grid_thw]
+        second_per_grid_ts = [
+            processor.video_processor.temporal_patch_size / processor.video_processor.fps
+        ] * len(video_grid_thw)
+    else:
+        video_grid_thw = None
+        second_per_grid_ts = None
+
+    position_ids, _ = get_rope_index(
+        merge_size,
+        data_dict["input_ids"],
+        image_grid_thw=torch.cat(grid_thw, dim=0) if grid_thw else None,
+        video_grid_thw=torch.cat(video_grid_thw, dim=0) if video_grid_thw else None,
+        second_per_grid_ts=second_per_grid_ts if second_per_grid_ts else None,
+    )
+
+    data_dict["position_ids"] = position_ids
+    data_dict["attention_mask"] = [seq_len]
+    return data_dict
 
 
 class LazySupervisedDataset(Dataset):
@@ -517,7 +595,119 @@ class LazySupervisedDataset(Dataset):
                         ),
                     }
                 )
-            return new_data_dict
+        return new_data_dict
+
+
+class LeRobotThinkDataset(Dataset):
+    """Build Qwen-VL think-supervision samples from a LeRobot VLA dataset."""
+
+    def __init__(self, processor, cfg, data_args):
+        super().__init__()
+        from starVLA.dataloader.lerobot_datasets import get_vla_dataset
+
+        self.processor = processor
+        self.data_args = data_args
+        self.prompt_template = getattr(data_args, "CoT_prompt", None) or cfg.datasets.vla_data.get("CoT_prompt", "{instruction}")
+        self.prompt_instruction_source = getattr(data_args, "prompt_instruction_source", "instruction")
+        self.prompt_instruction_key = getattr(data_args, "prompt_instruction_key", None)
+
+        answer_cfg = getattr(data_args, "think_answer", {}) or {}
+        if isinstance(answer_cfg, SimpleNamespace):
+            answer_cfg = vars(answer_cfg)
+        self.answer_template = answer_cfg.get(
+            "template",
+            '<think>Frames: {num_frames} total ({num_history} history + current). Now the task is "{target_instruction}"</think>',
+        )
+        self.answer_instruction_source = answer_cfg.get("instruction_source", "instruction")
+        self.answer_instruction_key = answer_cfg.get("instruction_key", None)
+
+        self.model_type = data_args.model_type
+        if data_args.model_type == "qwen3vl":
+            self.get_rope_index = get_rope_index_3
+        elif data_args.model_type == "qwen2.5vl":
+            self.get_rope_index = get_rope_index_25
+        elif data_args.model_type == "qwen2vl":
+            self.get_rope_index = get_rope_index_2
+        else:
+            raise ValueError(f"model_type: {data_args.model_type} not supported")
+        self.merge_size = getattr(processor.image_processor, "merge_size", 2)
+
+        vla_cfg = OmegaConf.create(OmegaConf.to_container(cfg.datasets.vla_data, resolve=True))
+        for key in (
+            "data_root_dir",
+            "data_mix",
+            "include_state",
+            "action_mode",
+            "video_backend",
+            "obs_image_size",
+            "history",
+            "delete_pause_frame",
+        ):
+            if hasattr(data_args, key):
+                setattr(vla_cfg, key, getattr(data_args, key))
+
+        self.vla_dataset = get_vla_dataset(
+            data_cfg=vla_cfg,
+            balance_dataset_weights=vla_cfg.get("balance_dataset_weights", False),
+            balance_trajectory_weights=vla_cfg.get("balance_trajectory_weights", False),
+        )
+        self.max_samples = getattr(data_args, "max_samples", None)
+
+    def __len__(self):
+        if self.max_samples in (None, "", 0, "0"):
+            return len(self.vla_dataset)
+        return min(len(self.vla_dataset), int(self.max_samples))
+
+    def _format_answer(self, sample: Dict[str, Any]) -> tuple[str, str, str]:
+        prompt_instruction = _select_lerobot_instruction(
+            sample,
+            self.prompt_instruction_source,
+            self.prompt_instruction_key,
+        )
+        target_instruction = _select_lerobot_instruction(
+            sample,
+            self.answer_instruction_source,
+            self.answer_instruction_key,
+        )
+
+        num_frames = int(sample.get("num_frames", len(sample["image"])))
+        num_history = int(sample.get("num_history_frames", max(num_frames - 1, 0)))
+        subtask_instruction = str(sample.get("subtask_lang") or target_instruction)
+        answer = self.answer_template.format(
+            instruction=prompt_instruction,
+            target_instruction=target_instruction,
+            subtask_instruction=subtask_instruction,
+            num_frames=num_frames,
+            num_history=num_history,
+        )
+        prompt = self.prompt_template.replace("{instruction}", prompt_instruction)
+        return prompt, answer, target_instruction
+
+    def __getitem__(self, i) -> Dict[str, torch.Tensor]:
+        sample = self.vla_dataset[i]
+        prompt, answer, _ = self._format_answer(sample)
+        images = sample["image"]
+        if not isinstance(images, list):
+            images = [images]
+
+        content = [{"type": "image", "image": image} for image in images]
+        content.append({"type": "text", "text": prompt})
+        messages = [
+            {"role": "user", "content": content},
+            {"role": "assistant", "content": [{"type": "text", "text": answer}]},
+        ]
+
+        data_dict = preprocess_qwen_messages(
+            messages,
+            self.processor,
+            response_text=answer,
+        )
+        return _add_qwen_position_ids(
+            data_dict,
+            self.processor,
+            self.get_rope_index,
+            self.merge_size,
+        )
 
 
 def pad_and_cat(tensor_list):
@@ -692,8 +882,41 @@ def make_supervised_data_module(processor, data_args) -> Dict:
     )
 
 
+def make_lerobot_think_dataloader(cfg):
+    data_args = cfg.datasets.vlm_data
+    processor = transformers.AutoProcessor.from_pretrained(cfg.framework.qwenvl.base_vlm)
+    processor.tokenizer.model_max_length = int(data_args.model_max_length)
+    processor.tokenizer.padding_side = "left"
+
+    data_args_ns = SimpleNamespace(**OmegaConf.to_container(data_args, resolve=True))
+    data_args_ns.data_flatten = getattr(data_args_ns, "data_flatten", False)
+    data_args_ns.data_packing = getattr(data_args_ns, "data_packing", False)
+    processor = update_processor_pixels(processor, data_args_ns)
+
+    train_dataset = LeRobotThinkDataset(
+        processor=processor,
+        cfg=cfg,
+        data_args=data_args_ns,
+    )
+    data_collator = DataCollatorForSupervisedDataset(processor.tokenizer)
+    from torch.utils.data import DataLoader
+
+    train_dataloader = DataLoader(
+        train_dataset,
+        batch_size=int(data_args.per_device_batch_size),
+        collate_fn=data_collator,
+        num_workers=int(data_args.get("num_workers", 4)),
+        pin_memory=bool(data_args.get("pin_memory", True)),
+    )
+
+    return train_dataloader
+
+
 def make_vlm_dataloader(cfg):
     data_args = cfg.datasets.vlm_data
+    if str(data_args.get("dataformat", "")) in {"lerobot_think", "astribot_lerobot_think"}:
+        return {"train_dataloader": make_lerobot_think_dataloader(cfg)}
+
     processor = transformers.AutoProcessor.from_pretrained(cfg.framework.qwenvl.base_vlm)
     processor.tokenizer.model_max_length = int(data_args.model_max_length)
     processor.tokenizer.padding_side = "left"
