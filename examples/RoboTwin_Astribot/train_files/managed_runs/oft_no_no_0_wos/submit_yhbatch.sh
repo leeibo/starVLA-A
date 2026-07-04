@@ -53,7 +53,18 @@ if [[ -z "${NUM_PROCESSES:-}" ]]; then
 fi
 
 export NUM_PROCESSES
-export WANDB_MODE="${WANDB_MODE:-offline}"
+EXPLICIT_WANDB_MODE="${WANDB_MODE:-}"
+if [[ -f "${REPO_ROOT}/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${REPO_ROOT}/.env"
+  set +a
+fi
+if [[ -n "${EXPLICIT_WANDB_MODE}" ]]; then
+  export WANDB_MODE="${EXPLICIT_WANDB_MODE}"
+else
+  export WANDB_MODE="${WANDB_MODE:-offline}"
+fi
 export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 
 echo "Run name: ${RUN_NAME}"

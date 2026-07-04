@@ -99,6 +99,8 @@ class Qwenvl_OFT_State(Qwenvl_OFT):
         self,
         qwen_inputs: dict,
         state_histories: List[np.ndarray],
+        insert_before: str = "action",
+        insert_indices=None,
     ) -> tuple[dict, torch.Tensor]:
         input_ids = qwen_inputs["input_ids"]
         attention_mask = qwen_inputs["attention_mask"]
@@ -116,16 +118,27 @@ class Qwenvl_OFT_State(Qwenvl_OFT):
         valid_labels = [] if labels is not None else None
 
         for batch_idx in range(batch_size):
-            seq_len = int(attention_mask[batch_idx].sum().item())
-            left_pad = seq_width - seq_len
+            valid_positions = torch.nonzero(attention_mask[batch_idx] != 0, as_tuple=False).flatten()
+            seq_len = int(valid_positions.numel())
 
-            embeds_i = base_embeds[batch_idx, left_pad:]
-            ids_i = input_ids[batch_idx, left_pad:]
-            attn_i = attention_mask[batch_idx, left_pad:]
-            labels_i = labels[batch_idx, left_pad:] if labels is not None else None
+            embeds_i = base_embeds[batch_idx, valid_positions]
+            ids_i = input_ids[batch_idx, valid_positions]
+            attn_i = attention_mask[batch_idx, valid_positions]
+            labels_i = labels[batch_idx, valid_positions] if labels is not None else None
 
-            action_positions = torch.nonzero(ids_i == self.action_token_id, as_tuple=False).flatten()
-            insert_at = int(action_positions[0].item()) if action_positions.numel() > 0 else seq_len
+            if insert_indices is not None:
+                insert_at = max(0, min(int(insert_indices[batch_idx]), seq_len))
+            elif insert_before == "action":
+                action_positions = torch.nonzero(ids_i == self.action_token_id, as_tuple=False).flatten()
+                insert_at = int(action_positions[0].item()) if action_positions.numel() > 0 else seq_len
+            elif insert_before == "supervised":
+                if labels_i is None:
+                    insert_at = seq_len
+                else:
+                    supervised = torch.nonzero(labels_i != IGNORE_INDEX, as_tuple=False).flatten()
+                    insert_at = int(supervised[0].item()) if supervised.numel() > 0 else seq_len
+            else:
+                raise ValueError(f"Invalid insert_before={insert_before!r}; expected 'action' or 'supervised'")
 
             state_tensor = torch.as_tensor(state_histories[batch_idx], dtype=torch.float32, device=device)
             state_tokens = self.state_encoder(state_tensor).to(device=device, dtype=base_embeds.dtype)
@@ -161,7 +174,16 @@ class Qwenvl_OFT_State(Qwenvl_OFT):
         prepared = {
             key: value
             for key, value in qwen_inputs.items()
-            if key not in {"input_ids", "inputs_embeds", "attention_mask", "labels", "position_ids"}
+            if key not in {
+                "input_ids",
+                "inputs_embeds",
+                "attention_mask",
+                "labels",
+                "position_ids",
+                "state",
+                "state_history",
+                "state_insert_index",
+            }
         }
         prepared["inputs_embeds"] = padded_embeds
         prepared["attention_mask"] = padded_attention
@@ -169,6 +191,25 @@ class Qwenvl_OFT_State(Qwenvl_OFT):
         if padded_labels is not None:
             prepared["labels"] = padded_labels
         return prepared, padded_input_ids
+
+    def prepare_vlm_state_conditioned_inputs(self, qwen_inputs: dict) -> dict:
+        state_histories = qwen_inputs.get("state_history", None)
+        if state_histories is None:
+            state_histories = qwen_inputs.get("state", None)
+        if state_histories is None:
+            raise KeyError(
+                "QwenOFTState VLM cotrain requires batch['state_history'] or batch['state']. "
+                "Set datasets.vlm_data.include_state: true only when the VLM dataloader provides state."
+            )
+        insert_indices = qwen_inputs.get("state_insert_index", None)
+
+        prepared, _ = self._prepare_state_conditioned_inputs(
+            qwen_inputs,
+            state_histories,
+            insert_before="supervised",
+            insert_indices=insert_indices,
+        )
+        return prepared
 
     def forward(self, examples: List[dict] = None, **kwargs) -> dict:
         batch_images = [example["image"] for example in examples]

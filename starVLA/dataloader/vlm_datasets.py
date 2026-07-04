@@ -30,6 +30,12 @@ DEFAULT_VIDEO_TOKEN = "<video>"
 local_rank = None
 
 
+def _as_bool(value) -> bool:
+    if isinstance(value, str):
+        return value.lower() in {"1", "true", "yes", "y"}
+    return bool(value)
+
+
 def rank0_print(*args):
     if local_rank == 0:
         print(*args)
@@ -273,6 +279,33 @@ def preprocess_qwen_messages(
             response_texts=[response_text],
         )
     return full_result
+
+
+def _qwen_user_content_end_index(messages, processor) -> int:
+    """Return token index just before the user turn is closed."""
+    if not messages or messages[0].get("role") != "user":
+        raise ValueError("Expected a user-first Qwen message list")
+    prompt_result = processor.apply_chat_template(
+        [messages[0]],
+        tokenize=True,
+        add_generation_prompt=False,
+        return_dict=True,
+        return_tensors="pt",
+    )
+    input_ids = prompt_result["input_ids"][0]
+    attention_mask = prompt_result.get("attention_mask", None)
+    if attention_mask is None:
+        valid_ids = input_ids
+    else:
+        valid_ids = input_ids[attention_mask[0].bool()]
+
+    im_end_token_id = processor.tokenizer.convert_tokens_to_ids("<|im_end|>")
+    if im_end_token_id is None:
+        im_end_token_id = processor.tokenizer.eos_token_id
+    im_end_positions = torch.nonzero(valid_ids == int(im_end_token_id), as_tuple=False).flatten()
+    if im_end_positions.numel() == 0:
+        return int(valid_ids.shape[0])
+    return int(im_end_positions[-1].item())
 
 
 def _select_lerobot_instruction(sample: Dict[str, Any], source: str, key: str | None = None) -> str:
@@ -610,6 +643,7 @@ class LeRobotThinkDataset(Dataset):
         self.prompt_template = getattr(data_args, "CoT_prompt", None) or cfg.datasets.vla_data.get("CoT_prompt", "{instruction}")
         self.prompt_instruction_source = getattr(data_args, "prompt_instruction_source", "instruction")
         self.prompt_instruction_key = getattr(data_args, "prompt_instruction_key", None)
+        self.include_state = _as_bool(getattr(data_args, "include_state", False))
 
         answer_cfg = getattr(data_args, "think_answer", {}) or {}
         if isinstance(answer_cfg, SimpleNamespace):
@@ -645,6 +679,8 @@ class LeRobotThinkDataset(Dataset):
         ):
             if hasattr(data_args, key):
                 setattr(vla_cfg, key, getattr(data_args, key))
+        if not self.include_state:
+            vla_cfg.include_state = False
 
         self.vla_dataset = get_vla_dataset(
             data_cfg=vla_cfg,
@@ -702,12 +738,32 @@ class LeRobotThinkDataset(Dataset):
             self.processor,
             response_text=answer,
         )
-        return _add_qwen_position_ids(
+        data_dict = _add_qwen_position_ids(
             data_dict,
             self.processor,
             self.get_rope_index,
             self.merge_size,
         )
+        if self.include_state:
+            data_dict["state_insert_index"] = _qwen_user_content_end_index(messages, self.processor)
+            state_history = sample.get("state_history", sample.get("state", None))
+            if state_history is None:
+                raise KeyError(
+                    "LeRobotThinkDataset requires sample['state_history'] or sample['state'] "
+                    "when datasets.vlm_data.include_state is true."
+                )
+            state_history = np.asarray(state_history, dtype=np.float32)
+            if state_history.ndim == 1:
+                state_history = state_history[None, :]
+            if state_history.ndim != 2:
+                raise ValueError(f"state_history must be [num_frames, state_dim], got {state_history.shape}")
+            if state_history.shape[0] != len(images):
+                raise ValueError(
+                    f"Expected one VLM state vector per image frame, got {state_history.shape[0]} states "
+                    f"for {len(images)} images."
+                )
+            data_dict["state_history"] = state_history
+        return data_dict
 
 
 def pad_and_cat(tensor_list):
@@ -791,6 +847,22 @@ class DataCollatorForSupervisedDataset(object):
         batch["pixel_values_videos"] = concat_videos
         batch["video_grid_thw"] = video_grid_thw
         batch["position_ids"] = position_ids
+        state_histories = [
+            instance["state_history"]
+            for instance in instances
+            if "state_history" in instance
+        ]
+        if state_histories:
+            if len(state_histories) != len(instances):
+                raise ValueError("Every VLM instance must include state_history when any instance includes it.")
+            batch["state_history"] = [
+                torch.as_tensor(state_history, dtype=torch.float32)
+                for state_history in state_histories
+            ]
+            batch["state_insert_index"] = torch.tensor(
+                [int(instance["state_insert_index"]) for instance in instances],
+                dtype=torch.long,
+            )
         return batch
 
 

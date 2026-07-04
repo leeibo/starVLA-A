@@ -32,6 +32,7 @@
 - `oft_instruction_*` 和 `oft_subtask_*` run 使用 `starVLA/training/train_starvla_cotrain.py`，需要同时配置 `datasets.vla_data` 和 `datasets.vlm_data`。
 - Cotrain run 中 `datasets.vlm_data.CoT_prompt` 必须与 `datasets.vla_data.CoT_prompt` 保持一致；两边只通过监督答案来源区分 `instruction/subtask`。
 - VLM branch 的监督来源由 `datasets.vlm_data.think_answer.instruction_source` 控制：`instruction` 表示总任务 instruction，`subtask_instruction` 表示 subtask instruction。
+- `QwenOFTState` cotrain run 可以设置 `datasets.vlm_data.include_state: true`，让 VLM branch 也接收与输入图片一一对应的 state soft token。VLM state token 插在 user 图像/语言 prompt embedding 之后、user turn 结束 token 之前，label 为 `IGNORE_INDEX`；这样 VLM 与 VLA action branch 的输入条件只差 OFT action query token。
 
 ## run_train.sh 检查项
 

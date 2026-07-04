@@ -37,7 +37,8 @@ datasets:
     video_max_frames: 16
     video_min_frames: 2
     video_fps: 1
-    per_device_batch_size: 1
+    per_device_batch_size: 7
+    include_state: true
     num_workers: 4
     pin_memory: true
     CoT_prompt: 'Your task is: "{instruction}" The input images are ordered from earliest to latest, and the last image is the current view. Please think about the next action.'
@@ -54,7 +55,7 @@ datasets:
     data_mix: robotwin_astribot
     include_state: true
     action_mode: abs
-    per_device_batch_size: 1
+    per_device_batch_size: 7
     video_backend: torchvision_av
     CoT_prompt: 'Your task is: "{instruction}" The input images are ordered from earliest to latest, and the last image is the current view. Please think about the next action.'
     oft_instruction:

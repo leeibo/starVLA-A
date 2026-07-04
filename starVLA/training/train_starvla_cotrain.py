@@ -351,6 +351,22 @@ class VLAMTrainer(TrainerUtils):
             logger.info(f"  Gradient accumulation steps = {self.accelerator.gradient_accumulation_steps}")
             logger.info(f"  Total batch size = {self.total_batch_size}")
 
+    def _vlm_include_state(self) -> bool:
+        value = self.config.datasets.vlm_data.get("include_state", False)
+        if isinstance(value, str):
+            return value.lower() in {"1", "true", "yes", "y"}
+        return bool(value)
+
+    def _forward_vlm_batch(self, batch_vlm, unwrapped_model):
+        if self._vlm_include_state():
+            if not hasattr(unwrapped_model, "prepare_vlm_state_conditioned_inputs"):
+                raise ValueError(
+                    "datasets.vlm_data.include_state requires a framework that can prepare "
+                    "state-conditioned VLM inputs."
+                )
+            batch_vlm = unwrapped_model.prepare_vlm_state_conditioned_inputs(batch_vlm)
+        return unwrapped_model.qwen_vl_interface(**batch_vlm)
+
     def _train_step(self, batch_vla, batch_vlm):
         """Execute single training step."""
         log_dict = {}
@@ -369,7 +385,7 @@ class VLAMTrainer(TrainerUtils):
 
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 unwrapped = self.accelerator.unwrap_model(self.model)
-                vlm_output = unwrapped.qwen_vl_interface(**batch_vlm)
+                vlm_output = self._forward_vlm_batch(batch_vlm, unwrapped)
                 vlm_loss = vlm_output.loss * self.config.trainer.loss_scale.vlm
             self.model.backward(vlm_loss)
 
@@ -398,7 +414,7 @@ class VLAMTrainer(TrainerUtils):
 
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 unwrapped = self.accelerator.unwrap_model(self.model)
-                vlm_output = unwrapped.qwen_vl_interface(**batch_vlm)
+                vlm_output = self._forward_vlm_batch(batch_vlm, unwrapped)
                 vlm_loss = vlm_output.loss * self.config.trainer.loss_scale.vlm
             self.accelerator.backward(vlm_loss)
 
@@ -423,6 +439,16 @@ class VLAMTrainer(TrainerUtils):
 
     def _finalize_training(self):
         """Training end processing."""
+        if getattr(self.config.trainer, "skip_final_save", False):
+            logger.info("Skipping final model save because trainer.skip_final_save is enabled.")
+            if self.accelerator.is_main_process and getattr(self, "_wandb_enabled", False):
+                try:
+                    wandb.finish()
+                except Exception:
+                    pass
+            self.accelerator.wait_for_everyone()
+            return
+
         if self.accelerator.is_main_process:
             save_format = getattr(self.config.trainer, "save_format", "pt")
             final_checkpoint = os.path.join(self.config.output_dir, "final_model")

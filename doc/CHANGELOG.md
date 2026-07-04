@@ -21,6 +21,122 @@ Notes:
 - Remaining risk, assumptions, or follow-up
 ```
 
+## 2026-07-04 - Managed Run W&B Env Precedence
+
+Scope:
+- `examples/RoboTwin_Astribot/train_files/managed_runs/start_managed_train.sh`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/*/submit_yhbatch.sh`
+
+Changes:
+- Updated local and batch managed-run launchers to source the repository-root `.env` before defaulting `WANDB_MODE` to `offline`.
+- Preserved explicit shell overrides such as `WANDB_MODE=offline` or `WANDB_MODE=disabled` as the highest-priority setting.
+
+Validation:
+- `bash -n` for all managed-run `run_train.sh`, `submit_yhbatch.sh`, and the shared local launcher.
+- `git diff --check`.
+
+Notes:
+- Existing already-started training processes keep their original W&B mode; restart the run to pick up this launcher change.
+
+## 2026-07-04 - OFT Cotrain Local Start Scripts
+
+Scope:
+- `examples/RoboTwin_Astribot/train_files/managed_runs/start_managed_train.sh`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/oft_*_*/start_train.sh`
+
+Changes:
+- Added a shared local training launcher that infers `NUM_PROCESSES` from `NUM_PROCESSES`, `GPU_IDS`, `CUDA_VISIBLE_DEVICES`, scheduler GPU variables, or `nvidia-smi`.
+- Added per-run `start_train.sh` wrappers for the nine OFT cotrain tasks.
+- The launcher writes stdout/stderr to each managed run's `logs/` directory and calls the existing `run_train.sh` without changing training semantics.
+
+Validation:
+- `bash -n` for the shared launcher and all nine per-run `start_train.sh` wrappers.
+- `git diff --check`.
+
+Notes:
+- `GPU_IDS=0,1 ./start_train.sh` can be used to bind a run to a specific GPU subset; otherwise all currently visible GPUs are used.
+
+## 2026-07-04 - OFT Cotrain Batch Safety Margin
+
+Scope:
+- `examples/RoboTwin_Astribot/train_files/managed_runs/oft_*_*/config.yaml`
+
+Changes:
+- Set the OFT cotrain managed-run VLA and VLM per-device batch sizes to the measured maximum OK batch size minus 1.
+- Applied the same value to `datasets.vla_data.per_device_batch_size` and `datasets.vlm_data.per_device_batch_size` in each cotrain config.
+
+Validation:
+- Parsed all updated OFT cotrain configs with `OmegaConf` in the `starVLA` conda environment.
+- `git diff --check`.
+
+Notes:
+- `oft_subtask_no_0_ws` previously reached the probe cap at 32 without an OOM, so it was conservatively set to 31 rather than an unmeasured higher value.
+
+## 2026-07-04 - OFT Subtask History Batch Retest
+
+Scope:
+- `examples/RoboTwin_Astribot/train_files/managed_runs/oft_subtask_subtask_12_ws/config.yaml`
+- `doc/memory_tests/run_oft_cotrain_2gpu_batch_probe.sh`
+
+Changes:
+- Changed the OFT cotrain memory probe default to `REQUIRE_FULL_HISTORY=false`, matching normal training behavior where sparse history can contain fewer than `history.max_frames` frames.
+- Added `CASES_OVERRIDE` support so a single managed run can be retested without editing the probe script.
+- Retested `oft_subtask_subtask_12_ws` without full-history forcing and set both VLA and VLM per-device batch sizes to 9.
+
+Validation:
+- `bash -n doc/memory_tests/run_oft_cotrain_2gpu_batch_probe.sh`.
+- Probe report: `doc/memory_tests/oft_cotrain_2gpu_batch_size_20260704T_subtask12_nofull.md`.
+- `oft_subtask_subtask_12_ws` passed 5 train steps plus eval at batch size 9; batch size 10 failed with CUDA OOM.
+
+Notes:
+- The previous full-history probe was a strict worst-case check and was not representative for `subtask_keyframe` history because the dataset often has fewer than 12 prior subtask keyframes.
+
+## 2026-07-04 - OFT Cotrain Batch Sizes
+
+Scope:
+- `examples/RoboTwin_Astribot/train_files/managed_runs/oft_*_*/config.yaml`
+
+Changes:
+- Updated OFT cotrain managed-run `datasets.vla_data.per_device_batch_size` and `datasets.vlm_data.per_device_batch_size` from the 2-GPU binary-search memory probe.
+- Set VLA and VLM per-device batch sizes to the same tested value for each cotrain run.
+- Left `oft_subtask_subtask_12_ws` at batch size 1 because it failed in data sampling, not GPU memory, even at batch size 1.
+
+Validation:
+- 2-GPU probe report: `doc/memory_tests/oft_cotrain_2gpu_batch_size_20260704T151930Z.md`.
+- `conda run -n starVLA python -c "from omegaconf import OmegaConf; ..."` for all updated OFT cotrain configs.
+- `git diff --check`.
+
+Notes:
+- `oft_subtask_no_0_ws` reached the configured probe cap of 32, so its true max may be higher.
+- `oft_subtask_subtask_12_ws` needs data/history constraint review before batch-size tuning is meaningful.
+
+## 2026-07-04 - OFTState VLM State Cotrain
+
+Scope:
+- `starVLA/dataloader/vlm_datasets.py`
+- `starVLA/model/framework/VLM4A/QwenOFTState.py`
+- `starVLA/training/train_starvla_cotrain.py`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/oft_instruction_action_12_ws/config.yaml`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/oft_subtask_*_ws/config.yaml`
+- `doc/training_config_guidelines.md`
+
+Changes:
+- Added `datasets.vlm_data.include_state: true` support for LeRobot-backed VLM think batches.
+- Preserved per-frame `state_history` through the VLM think dataset and collator.
+- Added `QwenOFTState.prepare_vlm_state_conditioned_inputs`, which inserts state soft tokens after the user image/language prompt and before the user turn closes, while masking their labels with `IGNORE_INDEX`.
+- Routed cotrain VLM loss through the state-conditioned path when `datasets.vlm_data.include_state` is enabled.
+- Enabled VLM state input for the existing `QwenOFTState` cotrain managed runs.
+
+Validation:
+- `/data/lmz/miniconda3/envs/starVLA/bin/python -m py_compile starVLA/dataloader/vlm_datasets.py starVLA/model/framework/VLM4A/QwenOFTState.py starVLA/training/train_starvla_cotrain.py`
+- Parsed all 11 OFT managed-run `config.yaml` files with `OmegaConf`.
+- Built LeRobot-backed VLM think samples for `oft_subtask_no_0_ws`, `oft_subtask_action_6_ws`, `oft_subtask_motion_6_ws`, and `oft_subtask_subtask_6_ws`; verified `state_history` aligns with image count and state-token insertion uses the user prompt boundary.
+- `bash -n` for all OFT managed-run `run_train.sh`, `submit_yhbatch.sh`, and `run_policy_server.sh` scripts.
+- `git diff --check`.
+
+Notes:
+- VLM state conditioning is explicit through `datasets.vlm_data.include_state`; plain `QwenOFT` cotrain runs remain text/image-only on the VLM branch.
+
 ## 2026-07-04 - OFT Prompt/History Managed Runs
 
 Scope:

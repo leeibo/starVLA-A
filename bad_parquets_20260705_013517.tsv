@@ -1,0 +1,2 @@
+playground/dataset/RoboTwin_Astribot_lerobot/place_empty_cup_rotate_view/data/chunk-000/episode_000007.parquet	1	OSError: Corrupt snappy compressed data.
+playground/dataset/RoboTwin_Astribot_lerobot/place_fan_rotate_view/data/chunk-000/episode_000003.parquet	1	OSError: Corrupt snappy compressed data.
