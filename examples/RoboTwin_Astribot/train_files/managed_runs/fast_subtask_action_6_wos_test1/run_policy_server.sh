@@ -51,7 +51,7 @@ if [[ ! -f "${CKPT_PATH}" ]]; then
   exit 1
 fi
 
-PORT="${POLICY_PORT:-7980}"
+PORT="${POLICY_PORT:-7901}"
 GPU_ID="${POLICY_GPU_ID:-0}"
 USE_BF16="${USE_BF16:-1}"
 IDLE_TIMEOUT="${IDLE_TIMEOUT:-1800}"
