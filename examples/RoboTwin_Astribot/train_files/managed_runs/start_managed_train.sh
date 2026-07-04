@@ -95,7 +95,7 @@ if [[ -z "${MAIN_PROCESS_PORT:-}" ]]; then
   if [[ -n "${MASTER_PORT:-}" ]]; then
     export MAIN_PROCESS_PORT="${MASTER_PORT}"
   else
-    export MAIN_PROCESS_PORT="$((29500 + RANDOM % 1000))"
+    export MAIN_PROCESS_PORT="0"
   fi
 fi
 

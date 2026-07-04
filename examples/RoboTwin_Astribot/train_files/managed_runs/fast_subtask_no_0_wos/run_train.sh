@@ -9,6 +9,7 @@ CONFIG_YAML="${SCRIPT_DIR}/config.yaml"
 ACCELERATE_CONFIG="${ACCELERATE_CONFIG:-starVLA/config/deepseeds/deepspeed_zero2.yaml}"
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-starVLA}"
 NUM_PROCESSES="${NUM_PROCESSES:-4}"
+MAIN_PROCESS_PORT="${MAIN_PROCESS_PORT:-${MASTER_PORT:-0}}"
 
 if [[ -z "${CUDA_HOME:-}" && -d /APP/u22/ai_x86/CUDA/12.4 ]]; then
   export CUDA_HOME=/APP/u22/ai_x86/CUDA/12.4
@@ -58,6 +59,7 @@ else
 fi
 
 "${ACCELERATE_CMD[@]}" launch \
+  --main_process_port "${MAIN_PROCESS_PORT}" \
   --config_file "${ACCELERATE_CONFIG}" \
   --num_processes "${NUM_PROCESSES}" \
   starVLA/training/train_starvla.py \

@@ -59,6 +59,7 @@ else
 fi
 
 "${ACCELERATE_CMD[@]}" launch \
+  --main_process_port "${MAIN_PROCESS_PORT}" \
   --config_file "${ACCELERATE_CONFIG}" \
   --num_processes "${NUM_PROCESSES}" \
   starVLA/training/train_starvla.py \
