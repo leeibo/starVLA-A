@@ -239,15 +239,24 @@ class Qwenvl_Fast_State(Qwenvl_Fast):
         qwen_inputs: dict,
         max_new_tokens: int,
     ) -> torch.LongTensor:
-        """Greedy generation path that preserves state soft-token embeddings."""
+        """Greedy generation path that preserves state soft-token embeddings.
+
+        Qwen3-VL position ids depend on image-grid tokens. After inserting
+        learned state embeddings, cached token-by-token decoding must keep the
+        multimodal rope/cache positions exactly aligned. The earlier cached
+        path drifted after a few generated tokens and produced invalid FAST
+        sequences even when teacher-forced loss was near zero. Recomputing the
+        short action response without KV cache is slower, but it keeps the
+        position ids consistent and stops once ``<|im_end|>``/EOS is emitted.
+        """
         model = self.qwen_vl_interface.model
         tokenizer = self.qwen_vl_interface.processor.tokenizer
         input_ids = qwen_inputs["input_ids"]
         inputs_embeds = qwen_inputs["inputs_embeds"]
         attention_mask = qwen_inputs["attention_mask"]
-        position_ids = qwen_inputs.get("position_ids", None)
         device = inputs_embeds.device
         batch_size = inputs_embeds.shape[0]
+        embed_layer = self._embedding_layer()
 
         generation_config = model.generation_config
         pad_token_id = generation_config.pad_token_id
@@ -261,42 +270,30 @@ class Qwenvl_Fast_State(Qwenvl_Fast):
         elif isinstance(eos_token_id, int):
             eos_token_ids = torch.tensor([eos_token_id], device=device)
         else:
-            eos_token_ids = torch.tensor(list(eos_token_id), device=device)
+                eos_token_ids = torch.tensor(list(eos_token_id), device=device)
 
-        prefill_kwargs = {
+        generation_kwargs = {
             key: value
             for key, value in qwen_inputs.items()
             if key not in {"input_ids", "inputs_embeds", "attention_mask", "position_ids", "labels"}
         }
         generated_ids = input_ids
         unfinished = torch.ones(batch_size, dtype=torch.long, device=device)
-        past_key_values = None
-        next_input_ids = None
 
-        for step_idx in range(int(max_new_tokens)):
-            if step_idx == 0:
-                outputs = model(
-                    input_ids=None,
-                    inputs_embeds=inputs_embeds,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    use_cache=True,
-                    return_dict=True,
-                    logits_to_keep=1,
-                    **prefill_kwargs,
-                )
-            else:
-                outputs = model(
-                    input_ids=next_input_ids,
-                    attention_mask=attention_mask,
-                    past_key_values=past_key_values,
-                    use_cache=True,
-                    return_dict=True,
-                    logits_to_keep=1,
-                )
+        for _ in range(int(max_new_tokens)):
+            position_ids = self._build_position_ids(generated_ids, attention_mask, qwen_inputs)
+            outputs = model(
+                input_ids=None,
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                use_cache=False,
+                return_dict=True,
+                logits_to_keep=1,
+                **generation_kwargs,
+            )
 
             next_tokens = torch.argmax(outputs.logits[:, -1, :], dim=-1)
-            past_key_values = outputs.past_key_values
 
             if eos_token_ids is not None:
                 next_tokens = next_tokens * unfinished + pad_token_id * (1 - unfinished)
@@ -314,6 +311,8 @@ class Qwenvl_Fast_State(Qwenvl_Fast):
                     break
 
             next_input_ids = next_tokens[:, None]
+            next_embeds = embed_layer(next_input_ids).to(device=device, dtype=inputs_embeds.dtype)
+            inputs_embeds = torch.cat([inputs_embeds, next_embeds], dim=1)
 
         return generated_ids
 

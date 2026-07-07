@@ -1,4 +1,4 @@
-run_id: oft_no_no_0_wos
+run_id: gr00t_no_action_12_ws
 run_root_dir: results/Checkpoints
 seed: 42
 wandb_entity: leeibo-beihang-university
@@ -7,32 +7,63 @@ is_debug: false
 version_id: "0.21"
 
 framework:
-  name: QwenOFT
+  name: QwenGR00TState
   qwenvl:
     base_vlm: ./playground/Pretrained_models/Qwen3-VL-2B-Instruct
     attn_implementation: flash_attention_2
 
   action_model:
-    action_model_type: MLP
+    action_model_type: DiT-B
+    action_hidden_dim: 1024
+    hidden_size: 1024
+    add_pos_embed: true
+    max_seq_len: 1024
     action_dim: 18
+    state_dim: 18
     action_horizon: 16
+    repeated_diffusion_steps: 8
+    noise_beta_alpha: 1.5
+    noise_beta_beta: 1.0
+    noise_s: 0.999
+    num_timestep_buckets: 1000
+    num_inference_timesteps: 4
+    num_target_vision_tokens: 32
+    diffusion_model_cfg:
+      dropout: 0.2
+      final_dropout: true
+      interleave_self_attention: true
+      norm_type: ada_norm
+      num_layers: 16
+      output_dim: 1024
+      positional_embeddings: null
+
+  state_model:
+    state_dim: 18
+    hidden_dim: 1024
+    dropout: 0.0
+    use_frame_embedding: true
+    max_frames: 256
 
 datasets:
   vla_data:
     dataset_py: lerobot_datasets
     data_root_dir: playground/dataset/RoboTwin_Astribot_lerobot
     data_mix: robotwin_astribot
-    include_state: false
+    include_state: true
     action_mode: abs
-    per_device_batch_size: 40
+    per_device_batch_size: 7
     video_backend: torchvision_av
     CoT_prompt: 'Your task is: "{instruction}" The input images are ordered from earliest to latest, and the last image is the current view. Please think about the next action.'
     oft_instruction:
       source: instruction
       key: lang
     history:
-      enabled: false
-      max_frames: 0
+      enabled: true
+      mode: action_keyframe
+      camera_key: video.camera_head
+      stride: 16
+      max_frames: 12
+      subtask_instruction_column: subtask_instruction
 
 trainer:
   is_resume: false
@@ -43,6 +74,7 @@ trainer:
   learning_rate:
     base: 1e-05
     qwen_vl_interface: 1.0e-05
+    state_encoder: 1.0e-04
     action_model: 1.0e-04
   lr_scheduler_type: cosine_with_min_lr
   scheduler_specific_kwargs:

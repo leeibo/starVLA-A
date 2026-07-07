@@ -21,6 +21,166 @@ Notes:
 - Remaining risk, assumptions, or follow-up
 ```
 
+## 2026-07-06 - GR00T Dual-Head No-State Action Run
+
+Scope:
+- `starVLA/model/framework/VLM4A/QwenGR00TDual.py`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/gr00tdual_subtask_action_12_wos/`
+
+Changes:
+- Added `QwenGR00TDual`, a no-state `QwenGR00T` variant with two independent GR00T DiT action heads.
+- The arm head supervises action dimensions `[0:16]`; the camera head supervises action dimensions `[16:18]`; inference concatenates both predictions back to 18 dimensions.
+- Added `gr00tdual_subtask_action_12_wos`, a cotrain managed run with action-keyframe history, 12 history frames, subtask think supervision, and state disabled.
+
+Validation:
+- Pending local syntax/config validation.
+
+## 2026-07-06 - GR00T State Dual-Head Action Run
+
+Scope:
+- `starVLA/model/framework/VLM4A/QwenGR00TStateDual.py`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/gr00tdual_subtask_action_12_ws/`
+
+Changes:
+- Added `QwenGR00TStateDual`, a `QwenGR00TState` variant with two independent GR00T DiT action heads.
+- The arm head supervises action dimensions `[0:16]`; the camera head supervises action dimensions `[16:18]`; loss is dimension-normalized and inference concatenates both predictions back to 18 dimensions.
+- Added `gr00tdual_subtask_action_12_ws`, a cotrain managed run based on `gr00t_subtask_action_12_ws`.
+
+Validation:
+- `conda run -n starVLA python -m py_compile starVLA/model/framework/VLM4A/QwenGR00TStateDual.py`
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/gr00tdual_subtask_action_12_ws/run_train.sh`
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/gr00tdual_subtask_action_12_ws/submit_yhbatch.sh`
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/gr00tdual_subtask_action_12_ws/run_policy_server.sh`
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/gr00tdual_subtask_action_12_ws/start_train.sh`
+- Parsed `gr00tdual_subtask_action_12_ws/config.yaml` with `OmegaConf`.
+- Imported `QwenGR00TStateDual` in the `starVLA` conda environment and confirmed registry registration.
+- `git diff --check`
+
+## 2026-07-06 - FAST Tokenizer Offline Loading
+
+Scope:
+- `starVLA/model/modules/action_model/fast_ActionHeader.py`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_12_ws/config.yaml`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_12_ws/README.md`
+- `doc/training_config_guidelines.md`
+
+Changes:
+- Made the FAST action tokenizer load from local files instead of falling back to a Hugging Face network download when the batch node is offline.
+- Added config support for `framework.action_model.fast_tokenizer_name` / `fast_tokenizer_path`.
+- Pointed `fast_subtask_action_12_ws` at `./playground/Pretrained_models/fast`.
+- Prepared the local FAST tokenizer mirror at `/data/lmz/ckpt/fast` and linked it from `playground/Pretrained_models/fast`.
+- Documented the local FAST tokenizer requirement.
+
+Validation:
+- `conda run -n starVLA python -m py_compile starVLA/model/modules/action_model/fast_ActionHeader.py`
+- `conda run -n starVLA python -c "from omegaconf import OmegaConf; from starVLA.model.modules.action_model.fast_ActionHeader import get_action_model; cfg=OmegaConf.load('examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_12_ws/config.yaml'); model=get_action_model(cfg); print(type(model.fast_tokenizer).__name__)"`.
+- `HF_HUB_OFFLINE=1 conda run -n starVLA python -c "from starVLA.model.modules.action_model.fast_ActionHeader import Fast_Action_Tokenizer; m=Fast_Action_Tokenizer(); print(type(m.fast_tokenizer).__name__, m.fast_tokenizer.vocab_size)"`.
+- `git diff --check`.
+
+## 2026-07-05 - FAST 12-Frame State Local Start Script
+
+Scope:
+- `examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_12_ws/start_train.sh`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_12_ws/README.md`
+
+Changes:
+- Added the run-local `start_train.sh` wrapper for `fast_subtask_action_12_ws`.
+- Documented the local launcher usage with `GPU_IDS`.
+
+Validation:
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_12_ws/start_train.sh`
+- `git diff --check`
+
+## 2026-07-05 - Planner OFT Training Project
+
+Scope:
+- `starVLA/dataloader/planner_oft_datasets.py`
+- `starVLA/model/framework/VLM4A/QwenPlannerVLM.py`
+- `starVLA/training/train_planner_oft_vlm.py`
+- `starVLA/training/train_planner_oft_vla.py`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/planner_oft/`
+
+Changes:
+- Added a separate planner-OFT dataloader module with fixed-stride planner inputs, retrieval-index supervision, and unbounded planner-memory VLA inputs.
+- Added a planner-only Qwen VLM framework and two wrapper entrypoints that use the new dataloaders without editing the existing dataloader registry or base training scripts.
+- Added the `planner_oft` managed project with planner and VLA configs, train launchers, `yhbatch` submission, policy-server script, and README.
+
+Validation:
+- `conda run -n starVLA python -m py_compile starVLA/dataloader/planner_oft_datasets.py starVLA/model/framework/VLM4A/QwenPlannerVLM.py starVLA/training/train_planner_oft_vlm.py starVLA/training/train_planner_oft_vla.py`
+- `bash -n` for all `planner_oft` shell scripts.
+- Parsed both `planner_oft` YAML configs with `OmegaConf`.
+- Built one task-1 VLA memory sample and one task-1 planner VLM batch.
+- Checked frame matching examples for retrieval indices.
+
+Notes:
+- Runtime planner inference, memory-bank maintenance, and frame-aligned state history remain client/eval-adapter responsibilities.
+
+## 2026-07-05 - Planner OFT Local Start Scripts
+
+Scope:
+- `examples/RoboTwin_Astribot/train_files/managed_runs/planner_oft/start_train.sh`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/planner_oft/start_planner_train.sh`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/planner_oft/start_vla_train.sh`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/planner_oft/README.md`
+
+Changes:
+- Added run-local local-start wrappers for both planner and VLA stages.
+- Kept stage selection in `PLANNER_OFT_STAGE` and delegated environment setup/logging to the shared managed-run launcher.
+
+Validation:
+- `bash -n` for the new start scripts.
+
+## 2026-07-05 - FAST 12-Frame State Managed Run
+
+Scope:
+- `examples/RoboTwin_Astribot/train_files/managed_runs/fast_subtask_action_12_ws/`
+
+Changes:
+- Added `fast_subtask_action_12_ws`, a `QwenFastState` run with action-keyframe history, 12 history frames, subtask think supervision, and state input enabled.
+- Configured the run to start from `Qwen3-VL-2B-Instruct-Action` with FAST action tokens already present and `auto_add_action_tokens: false`.
+- Added managed-run training, `yhbatch`, policy-server, and README files.
+
+Validation:
+- `bash -n` for the added shell scripts.
+- Parsed `config.yaml` with `OmegaConf` in the `starVLA` conda environment and checked run id, framework, state flag, history length, no VLM data block, and FAST action-token setting.
+- Confirmed `run_train.sh` does not pass framework/datasets/trainer/run/W&B dotlist overrides.
+- `git diff --check`.
+
+Notes:
+- Set `datasets.vla_data.per_device_batch_size: 6`, matching the existing 12-frame FAST run and keeping margin for state tokens.
+
+## 2026-07-05 - OFT No No Local Start Script
+
+Scope:
+- `examples/RoboTwin_Astribot/train_files/managed_runs/oft_no_no_0_wos/start_train.sh`
+
+Changes:
+- Added the run-local `start_train.sh` wrapper for `oft_no_no_0_wos`, matching the existing OFT managed-run launcher pattern.
+- The wrapper delegates to `../start_managed_train.sh` and does not change training semantics.
+
+Validation:
+- `bash -n examples/RoboTwin_Astribot/train_files/managed_runs/oft_no_no_0_wos/start_train.sh`
+
+Notes:
+- Use `GPU_IDS=0,1 ./start_train.sh` from the run directory to bind local startup to a GPU subset.
+
+## 2026-07-05 - GR00T State Action-Keyframe Managed Runs
+
+Scope:
+- `examples/RoboTwin_Astribot/train_files/managed_runs/gr00t_no_action_12_ws/`
+- `examples/RoboTwin_Astribot/train_files/managed_runs/gr00t_subtask_action_12_ws/`
+
+Changes:
+- Added `gr00t_no_action_12_ws`, a `QwenGR00TState` VLA-only run based on `oft_no_action_12_ws`.
+- Added `gr00t_subtask_action_12_ws`, a `QwenGR00TState` cotrain run based on `oft_subtask_action_12_ws`.
+- Both runs use action-keyframe history with max 12 history frames, state soft tokens, Qwen3-VL-2B, and a GR00T DiT action head.
+- Added run-local training, batch submission, policy server, local start, and README files for both runs.
+
+Validation:
+- `bash -n` for all added shell scripts.
+- Parsed both new `config.yaml` files with `OmegaConf`.
+- Confirmed `run_train.sh` scripts do not pass framework/datasets/trainer dotlist overrides.
+
 ## 2026-07-04 - Managed Run W&B Env Precedence
 
 Scope:

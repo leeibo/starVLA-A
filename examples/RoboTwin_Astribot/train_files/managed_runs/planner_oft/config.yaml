@@ -1,4 +1,4 @@
-run_id: oft_no_no_0_wos
+run_id: planner_oft
 run_root_dir: results/Checkpoints
 seed: 42
 wandb_entity: leeibo-beihang-university
@@ -7,7 +7,7 @@ is_debug: false
 version_id: "0.21"
 
 framework:
-  name: QwenOFT
+  name: QwenOFTState
   qwenvl:
     base_vlm: ./playground/Pretrained_models/Qwen3-VL-2B-Instruct
     attn_implementation: flash_attention_2
@@ -17,32 +17,47 @@ framework:
     action_dim: 18
     action_horizon: 16
 
+  state_model:
+    state_dim: 18
+    hidden_dim: 1024
+    dropout: 0.0
+    use_frame_embedding: true
+    max_frames: 512
+
 datasets:
   vla_data:
-    dataset_py: lerobot_datasets
+    dataset_py: planner_oft_datasets
     data_root_dir: playground/dataset/RoboTwin_Astribot_lerobot
     data_mix: robotwin_astribot
-    include_state: false
+    include_state: true
     action_mode: abs
-    per_device_batch_size: 40
+    per_device_batch_size: 13
+    num_workers: 4
+    pin_memory: true
     video_backend: torchvision_av
     CoT_prompt: 'Your task is: "{instruction}" The input images are ordered from earliest to latest, and the last image is the current view. Please think about the next action.'
     oft_instruction:
-      source: instruction
-      key: lang
+      source: subtask_instruction
+      key: subtask_lang
     history:
-      enabled: false
-      max_frames: 0
+      enabled: true
+      mode: planner_oft_memory
+      camera_key: video.camera_head
+      stride: 16
+      max_frames: null
+      subtask_keyframe_column: subtask_keyframe
+      subtask_instruction_column: subtask_instruction
 
 trainer:
   is_resume: false
   max_train_steps: 100000
   num_warmup_steps: 5000
   save_interval: 5000
-  eval_interval: 500
+  eval_interval: 10
   learning_rate:
     base: 1e-05
     qwen_vl_interface: 1.0e-05
+    state_encoder: 1.0e-04
     action_model: 1.0e-04
   lr_scheduler_type: cosine_with_min_lr
   scheduler_specific_kwargs:

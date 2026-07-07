@@ -15,6 +15,7 @@
 - `framework.name: QwenFast` 表示不使用 state；`datasets.vla_data.include_state: false`。
 - `framework.name: QwenFastState` 表示使用 state；`datasets.vla_data.include_state: true`，并添加 `framework.state_model`。
 - FAST 动作监督需要 `<robot_action_*>` token。正式训练配置应指向离线生成的 `*-Action` checkpoint，例如 `./playground/Pretrained_models/Qwen3-VL-2B-Instruct-Action`，并设置 `framework.action_model.auto_add_action_tokens: false`。
+- FAST tokenizer 也必须使用本地目录，避免 batch 节点联网下载 `physical-intelligence/fast`；推荐在 `framework.action_model.fast_tokenizer_name` 中写 `./playground/Pretrained_models/fast`，或通过 `STARGVLA_FAST_TOKENIZER` 指向等价本地目录。
 - plain Qwen3/Qwen2.5 checkpoint 只用于显式开发实验；此时才手动设置 `framework.action_model.auto_add_action_tokens: true`，让启动过程临时添加并 resize embedding。
 - `datasets.vla_data.dataset_py` 使用 `lerobot_datasets`。
 - `datasets.vla_data.CoT_prompt` 定义 user prompt。

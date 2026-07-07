@@ -226,6 +226,11 @@ class Qwenvl_OFT(baseframework):
             examples = [examples]
         batch_images = [to_pil_preserve(example["image"]) for example in examples]  #  [B，[PLT]]
         instructions = [self._select_prompt_instruction(example) for example in examples]  # [B, str]
+        return_vlm_text = bool(kwargs.get("return_vlm_text", False))
+        vlm_text_instructions = [
+            self._select_vlm_text_instruction(example, fallback=instructions[idx])
+            for idx, example in enumerate(examples)
+        ]
 
         train_obs_image_size = getattr(self.config.datasets.vla_data, "obs_image_size", None)
         if train_obs_image_size:
@@ -264,7 +269,14 @@ class Qwenvl_OFT(baseframework):
             pred_actions = self.action_model.predict_action(action_queries)  # (B, chunk_len, action_dim)
 
         normalized_actions = pred_actions.detach().cpu().numpy()
-        return {"normalized_actions": normalized_actions}
+        ret = {"normalized_actions": normalized_actions}
+        if return_vlm_text:
+            ret["vlm_text"] = self._generate_vlm_text(
+                batch_images,
+                vlm_text_instructions,
+                max_new_tokens=int(kwargs.get("vlm_text_max_new_tokens", 128)),
+            )
+        return ret
 
     def _gather_action_token_embeddings(
         self,
@@ -375,6 +387,34 @@ class Qwenvl_OFT(baseframework):
             return task_instruction
         custom_instruction = self._first_example_text(example, [source, configured_key])
         return custom_instruction or task_instruction
+
+    def _select_vlm_text_instruction(self, example: dict, fallback: str) -> str:
+        return self._first_example_text(example, ["task_lang", "lang"]) or fallback
+
+    @torch.inference_mode()
+    def _generate_vlm_text(
+        self,
+        batch_images: list,
+        instructions: list[str],
+        *,
+        max_new_tokens: int = 128,
+    ) -> list[str]:
+        qwen_inputs = self.qwen_vl_interface.build_qwenvl_inputs(
+            images=batch_images,
+            instructions=instructions,
+        )
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            generated_ids = self.qwen_vl_interface.model.generate(
+                **qwen_inputs,
+                max_new_tokens=int(max_new_tokens),
+                do_sample=False,
+            )
+        prompt_length = qwen_inputs["input_ids"].shape[1]
+        return self.qwen_vl_interface.processor.tokenizer.batch_decode(
+            generated_ids[:, prompt_length:],
+            skip_special_tokens=False,
+            clean_up_tokenization_spaces=False,
+        )
 
 if __name__ == "__main__":
     import argparse
