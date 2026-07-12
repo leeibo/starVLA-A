@@ -2,13 +2,38 @@
 set -euo pipefail
 
 RUN_NAME="fast_subtask_action_6_wos"
-REPO_ROOT="${STARGVLA_REPO_ROOT:-/XYAIFS00/HDD_POOL/hlkj_zql/hlkj_zql_8/code/starVLA}"
-RUN_OUTPUT="${RUN_OUTPUT:-${REPO_ROOT}/results/Checkpoints/${RUN_NAME}}"
+MANAGED_RUNS_ROOT="${MANAGED_RUNS_ROOT:-/private/zjb/workspace/starVLA-A/examples/RoboTwin_Astribot/train_files/managed_runs}"
+if [[ -n "${STARGVLA_REPO_ROOT:-}" ]]; then
+  REPO_ROOT="${STARGVLA_REPO_ROOT}"
+else
+  REPO_ROOT="$(cd "${MANAGED_RUNS_ROOT}/../../../.." && pwd -P)"
+fi
+RUN_OUTPUT="${RUN_OUTPUT:-${REPO_ROOT}/results/${RUN_NAME}}"
 
 cd "${REPO_ROOT}"
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 
-STARVLA_PYTHON="${STARVLA_PYTHON:-/HOME/hlkj_zql/hlkj_zql_8/HDD_POOL/conda_envs/starVLA/bin/python}"
+export STARGVLA_BASE_VLM="${STARGVLA_BASE_VLM:-${REPO_ROOT}/playground/Pretrained_models/Qwen3-VL-2B-Instruct-Action}"
+if [[ ! -d "${STARGVLA_BASE_VLM}" ]]; then
+  cat >&2 <<EOF
+Missing base VLM directory:
+  ${STARGVLA_BASE_VLM}
+
+This checkpoint was trained with Qwen3-VL-2B-Instruct-Action. Prepare it at the
+path above, or set STARGVLA_BASE_VLM to an existing local action-token model.
+To generate it from the plain Qwen checkpoint:
+
+  python starVLA/model/modules/vlm/tools/add_qwen_special_tokens/add_special_tokens_to_qwen.py \\
+    --model-id Qwen/Qwen3-VL-2B-Instruct \\
+    --save-dir "${STARGVLA_BASE_VLM}" \\
+    --tokens-file starVLA/model/modules/vlm/tools/add_qwen_special_tokens/fast_tokens.txt \\
+    --init-strategy normal \\
+    --device auto
+EOF
+  exit 1
+fi
+
+STARVLA_PYTHON="${STARVLA_PYTHON:-python}"
 if [[ ! -x "${STARVLA_PYTHON}" ]]; then
   STARVLA_PYTHON="python"
 fi
@@ -51,7 +76,7 @@ if [[ ! -f "${CKPT_PATH}" ]]; then
   exit 1
 fi
 
-PORT="${POLICY_PORT:-7980}"
+PORT="${POLICY_PORT:-7901}"
 GPU_ID="${POLICY_GPU_ID:-0}"
 USE_BF16="${USE_BF16:-1}"
 IDLE_TIMEOUT="${IDLE_TIMEOUT:-1800}"

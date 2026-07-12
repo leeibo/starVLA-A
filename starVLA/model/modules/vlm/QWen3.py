@@ -2,6 +2,7 @@
 # Licensed under the MIT License, Version 1.0 (the "License");
 # Implemented by [Jinhui YE / HKUST University] in [2025].
 
+from pathlib import Path
 from typing import Optional
 
 import torch
@@ -29,6 +30,28 @@ _ACTION_TOKEN_MAX = (
 import torch.nn as nn
 
 
+def _resolve_local_model_id(model_id: str) -> str:
+    model_path = Path(model_id).expanduser()
+    if model_path.is_absolute():
+        resolved = model_path
+    elif model_id.startswith(("./", "../")) or "/" in model_id:
+        repo_root = Path(__file__).resolve().parents[4]
+        resolved = repo_root / model_path
+    else:
+        return model_id
+
+    if resolved.exists():
+        return str(resolved)
+
+    if model_id.startswith(("./", "../")) or model_path.is_absolute():
+        raise FileNotFoundError(
+            "Configured Qwen3-VL base_vlm does not exist locally: "
+            f"{model_id!r} resolved to {resolved}. "
+            "Create/symlink this directory or set STARGVLA_BASE_VLM to a valid local model path."
+        )
+    return model_id
+
+
 class _QWen3_VL_Interface(nn.Module):
     """
     This exists because of the diversity of VLMs, so we encapsulate the changes here.
@@ -51,6 +74,7 @@ class _QWen3_VL_Interface(nn.Module):
 
         qwenvl_config = config.framework.get("qwenvl", {})
         model_id = qwenvl_config.get("base_vlm", "Qwen/Qwen3-VL-4B-Instruct")
+        model_id = _resolve_local_model_id(model_id)
         attn_implementation = qwenvl_config.get("attn_implementation", "sdpa")
         # Fallback to sdpa if flash_attention_2 is requested but flash_attn is not installed
         if attn_implementation == "flash_attention_2":

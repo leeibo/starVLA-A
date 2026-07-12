@@ -3,7 +3,7 @@ set -euo pipefail
 
 RUN_NAME="oft_no_no_0_wos"
 REPO_ROOT="${STARGVLA_REPO_ROOT:-/XYAIFS00/HDD_POOL/hlkj_zql/hlkj_zql_8/code/starVLA}"
-RUN_OUTPUT="${RUN_OUTPUT:-${REPO_ROOT}/results/Checkpoints/${RUN_NAME}}"
+RUN_OUTPUT="${RUN_OUTPUT:-${REPO_ROOT}/results/${RUN_NAME}}"
 
 cd "${REPO_ROOT}"
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"

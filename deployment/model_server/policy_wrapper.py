@@ -3,9 +3,9 @@
 """Policy server wrapper.
 
 Encapsulates a `baseframework` instance plus a :class:`PolicyNormProcessor`
-that reuses the *training-time* :class:`ComposedModalityTransform` for action
-un-normalization (no hand-rolled math). The websocket server returns
-already-unnormalized actions.
+that reuses the *training-time* :class:`ComposedModalityTransform` for state
+normalization and action un-normalization (no hand-rolled math). The websocket
+server accepts raw environment states and returns already-unnormalized actions.
 
 Client-side responsibilities that REMAIN on the client:
   - environment-specific adapters (image_history, gripper sticky, action
@@ -106,6 +106,15 @@ class PolicyServerWrapper:
             )
         return self._norm_processors[cache_key]
 
+    @staticmethod
+    def _normalize_example_states(example: dict, proc: PolicyNormProcessor) -> dict:
+        normalized = dict(example)
+        for key in ("state_history", "state"):
+            value = normalized.get(key, None)
+            if value is not None:
+                normalized[key] = proc.apply_state(value)
+        return normalized
+
     @property
     def metadata(self) -> Dict[str, Any]:
         """Model-invariant metadata; sent to client at websocket handshake."""
@@ -129,10 +138,11 @@ class PolicyServerWrapper:
         unnorm_key: Optional[str] = None,
         **kwargs,
     ) -> Dict[str, np.ndarray]:
-        """Run the framework, then un-normalize via training-time transforms.
+        """Normalize state inputs, run the framework, then un-normalize actions.
 
         Args:
-            examples: list of dicts (each with ``image`` / ``lang`` / optional ``state``).
+            examples: list of dicts with ``image`` / ``lang`` and optional raw
+                ``state`` or ``state_history``.
             unnorm_key: dataset key for un-normalization stats. ``None`` -->
                 use the wrapper's default (auto-picked at startup).
             **kwargs: forwarded to the framework's ``predict_action``
@@ -152,7 +162,8 @@ class PolicyServerWrapper:
                 )
         proc = self._get_processor(effective_key)
 
-        out = self._framework.predict_action(examples=examples, **kwargs)
+        model_examples = [self._normalize_example_states(example, proc) for example in examples]
+        out = self._framework.predict_action(examples=model_examples, **kwargs)
         normalized = np.asarray(out["normalized_actions"])  # (B, T, D)
 
         unnorm = np.stack(

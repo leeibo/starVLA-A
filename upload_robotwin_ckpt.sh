@@ -21,6 +21,9 @@ CHECKPOINT_UPLOAD_JOBS="${CHECKPOINT_UPLOAD_JOBS:-4}"
 # 每个 .pt 的切片同时上传多少个 part
 PART_UPLOAD_JOBS="${PART_UPLOAD_JOBS:-4}"
 
+# 默认跳过远端已经存在的文件；需要强制覆盖时可设为 0
+SKIP_EXISTING_REMOTE="${SKIP_EXISTING_REMOTE:-1}"
+
 # 如果 modelscope 不在 PATH，自动补一下
 export PATH="/HOME/hlkj_zql/hlkj_zql_8/.local/bin:$PATH"
 
@@ -56,11 +59,148 @@ if [ ! -d "$SRC_DIR" ]; then
 fi
 
 # ======================
+# Remote file existence cache
+# ======================
+REMOTE_FILE_LIST=""
+REMOTE_FILE_LIST_READY=0
+
+cleanup_remote_file_list() {
+  if [ -n "${REMOTE_FILE_LIST}" ] && [ -f "${REMOTE_FILE_LIST}" ]; then
+    rm -f "${REMOTE_FILE_LIST}"
+  fi
+}
+
+trap cleanup_remote_file_list EXIT
+
+resolve_modelscope_python() {
+  if [ -n "${MODELSCOPE_PYTHON:-}" ]; then
+    if "${MODELSCOPE_PYTHON}" -c "import modelscope" >/dev/null 2>&1; then
+      echo "${MODELSCOPE_PYTHON}"
+      return 0
+    fi
+
+    echo "ERROR: MODELSCOPE_PYTHON cannot import modelscope:" >&2
+    echo "  ${MODELSCOPE_PYTHON}" >&2
+    return 1
+  fi
+
+  local ms_bin
+  ms_bin="$(command -v modelscope || true)"
+
+  if [ -n "${ms_bin}" ]; then
+    local shebang
+    shebang="$(head -n 1 "${ms_bin}" 2>/dev/null || true)"
+
+    if [[ "${shebang}" == "#!"* ]]; then
+      local interpreter="${shebang#\#!}"
+
+      if [[ "${interpreter}" != *[[:space:]]* ]] && "${interpreter}" -c "import modelscope" >/dev/null 2>&1; then
+        echo "${interpreter}"
+        return 0
+      fi
+    fi
+  fi
+
+  if python3 -c "import modelscope" >/dev/null 2>&1; then
+    echo "python3"
+    return 0
+  fi
+
+  if python -c "import modelscope" >/dev/null 2>&1; then
+    echo "python"
+    return 0
+  fi
+
+  echo "ERROR: cannot find a Python interpreter with modelscope installed." >&2
+  echo "Set MODELSCOPE_PYTHON=/path/to/python or SKIP_EXISTING_REMOTE=0." >&2
+  return 1
+}
+
+load_remote_file_list() {
+  if [ "${SKIP_EXISTING_REMOTE}" != "1" ]; then
+    return 1
+  fi
+
+  if [ "${REMOTE_FILE_LIST_READY}" = "1" ]; then
+    return 0
+  fi
+
+  local ms_python
+  if ! ms_python="$(resolve_modelscope_python)"; then
+    exit 1
+  fi
+
+  REMOTE_FILE_LIST="$(mktemp /tmp/modelscope_remote_files.XXXXXX)"
+
+  echo
+  echo "Loading remote file list to skip existing files..."
+  echo "  repo  : ${REPO_ID}"
+  echo "  python: ${ms_python}"
+
+  if ! "${ms_python}" - "${REPO_ID}" "${REPO_TYPE}" > "${REMOTE_FILE_LIST}" <<'PY'
+import sys
+
+from modelscope.hub.api import HubApi
+
+repo_id = sys.argv[1]
+repo_type = sys.argv[2]
+
+api = HubApi()
+
+if repo_type == "model":
+    items = api.get_model_files(repo_id, recursive=True)
+elif repo_type == "dataset":
+    items = api.get_dataset_files(repo_id, recursive=True)
+else:
+    raise ValueError(f"Unsupported repo_type for file listing: {repo_type}")
+
+for item in items:
+    path = item.get("Path") or item.get("path")
+    if path:
+        print(path)
+PY
+  then
+    echo "ERROR: failed to list remote files. Refusing to upload because SKIP_EXISTING_REMOTE=1."
+    exit 1
+  fi
+
+  REMOTE_FILE_LIST_READY=1
+
+  echo "Remote paths cached: $(wc -l < "${REMOTE_FILE_LIST}")"
+}
+
+remote_file_exists() {
+  local remote_path="$1"
+
+  if [ "${SKIP_EXISTING_REMOTE}" != "1" ]; then
+    return 1
+  fi
+
+  load_remote_file_list
+  grep -Fxq -- "${remote_path}" "${REMOTE_FILE_LIST}"
+}
+
+mark_remote_file_uploaded() {
+  local remote_path="$1"
+
+  if [ "${REMOTE_FILE_LIST_READY}" = "1" ]; then
+    printf '%s\n' "${remote_path}" >> "${REMOTE_FILE_LIST}"
+  fi
+}
+
+# ======================
 # Upload with retry
 # ======================
 ms_upload_retry() {
   local local_path="$1"
   local remote_path="$2"
+
+  if remote_file_exists "${remote_path}"; then
+    echo
+    echo "Skip existing remote file:"
+    echo "  remote: ${remote_path}"
+    return 0
+  fi
 
   local max_retry=10
   local retry=1
@@ -77,6 +217,7 @@ ms_upload_retry() {
       "${remote_path}" \
       --repo-type "${REPO_TYPE}"; then
       echo "Upload success: ${remote_path}"
+      mark_remote_file_uploaded "${remote_path}"
       return 0
     fi
 
@@ -487,6 +628,7 @@ echo "Target:                ${TARGET_DESC}"
 echo "Part size:             ${PART_SIZE}"
 echo "Checkpoint jobs:       ${CHECKPOINT_UPLOAD_JOBS}"
 echo "Part jobs per .pt:     ${PART_UPLOAD_JOBS}"
+echo "Skip existing remote:  ${SKIP_EXISTING_REMOTE}"
 echo "========================================"
 
 upload_root_files

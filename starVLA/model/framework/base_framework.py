@@ -7,6 +7,7 @@ Note: No device placement or optimizer concerns handled here (delegated to train
 """
 
 import importlib
+import os
 import pkgutil
 from pathlib import Path
 from typing import Any, Dict, List
@@ -21,6 +22,16 @@ from starVLA.training.trainer_utils import initialize_overwatch
 
 logger = initialize_overwatch(__name__)
 _FRAMEWORKS_IMPORTED = False
+
+
+def _apply_runtime_model_path_overrides(model_config) -> None:
+    base_vlm = os.environ.get("STARGVLA_BASE_VLM")
+    if not base_vlm:
+        return
+    if not hasattr(model_config, "framework") or not hasattr(model_config.framework, "qwenvl"):
+        return
+    model_config.framework.qwenvl.base_vlm = base_vlm
+    logger.info(f"Runtime override: framework.qwenvl.base_vlm={base_vlm}")
 
 
 def _auto_import_framework_modules() -> None:
@@ -235,6 +246,7 @@ class baseframework(PreTrainedModel):
         config = dict_to_namespace(model_config)
         model_config = config
         model_config.trainer.pretrained_checkpoint = None
+        _apply_runtime_model_path_overrides(model_config)
         
         FrameworkModel = build_framework(cfg=model_config)
         # set for action un-norm
@@ -266,4 +278,3 @@ class baseframework(PreTrainedModel):
         # **ensure model is on GPU**
         FrameworkModel = FrameworkModel
         return FrameworkModel
-

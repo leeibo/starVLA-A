@@ -347,6 +347,58 @@ class PolicyNormProcessor:
         return self._transform
 
     # ------------------------------------------------------------------
+    # Forward path (env state -> model state)
+    # ------------------------------------------------------------------
+    def apply_state(self, states: np.ndarray) -> np.ndarray:
+        """Apply training-time state normalization.
+
+        Args:
+            states: shape ``(D,)`` or ``(T, D)`` where
+                ``D == sum(state_key_dims.values())``.
+
+        Returns:
+            Normalized states with the same rank as the input.
+        """
+        states = np.asarray(states)
+        original_ndim = states.ndim
+        if states.ndim == 1:
+            states = states[None, :]
+        if states.ndim != 2:
+            raise ValueError(f"Expected state shape (D,) or (T, D); got {states.shape}")
+        if not self._state_keys:
+            normalized = states.astype(np.float32, copy=False)
+            return normalized[0] if original_ndim == 1 else normalized
+
+        data: Dict[str, np.ndarray] = {}
+        cursor = 0
+        for full_key in self._state_keys:
+            dim_k = self._state_key_dims.get(full_key, 1)
+            data[full_key] = np.asarray(
+                states[..., cursor : cursor + dim_k],
+                dtype=np.float32,
+            )
+            cursor += dim_k
+
+        if cursor != states.shape[-1]:
+            raise ValueError(
+                f"Sum of per-key dims ({cursor}) != state_dim "
+                f"({states.shape[-1]}). "
+                f"state_keys={self._state_keys}, "
+                f"state_key_dims={self._state_key_dims}"
+            )
+
+        out = self._transform(data)
+
+        parts: List[np.ndarray] = []
+        for full_key in self._state_keys:
+            v = out[full_key]
+            if isinstance(v, torch.Tensor):
+                v = v.detach().cpu().numpy()
+            parts.append(np.asarray(v, dtype=np.float32))
+        normalized = np.concatenate(parts, axis=-1)
+        return normalized[0] if original_ndim == 1 else normalized
+
+    # ------------------------------------------------------------------
     # Inverse path (model output → env action)
     # ------------------------------------------------------------------
     def unapply_actions(self, normalized_actions: np.ndarray) -> np.ndarray:
