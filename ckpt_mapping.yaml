@@ -1,10 +1,10 @@
 # Default checkpoint step selected at approximately 2.61 training epochs.
 checkpoints:
-  fast_subtask_action_12_ws: 100000 # --
-  gr00t_subtask_action_12_ws: 90000 # --
+  fast_subtask_action_12_ws: 200000 # -- TODO acc 0
+  gr00t_subtask_action_12_ws: 150000 # -- TODO acc 0
   oft_instruction_action_12_ws: 100000 #
   oft_no_action_12_ws: 100000 # --
-  oft_no_no_0_wos: 20000 # --
+  oft_no_no_0_wos: 100000 # -- TODO acc 0
   oft_subtask_action_12_wos: 90000 # 
   oft_subtask_action_12_ws: 100000 #
   oft_subtask_action_6_ws: 55000 #
@@ -12,10 +12,10 @@ checkpoints:
   oft_subtask_motion_6_ws: 55000
   oft_subtask_subtask_12_ws: 60000 
   oft_subtask_subtask_6_ws: 55000
-  planner_oft: 55000
-  planner_oft_planner: 90000
+  planner_oft: 100000
+  planner_oft_planner: 100000
+  gr00tdual_subtask_action_12_wos: 110000
+  gr00tdual_subtask_action_12_ws: 110000
 
 # No checkpoint close enough to the target epoch is currently available.
 unavailable:
-  gr00tdual_subtask_action_12_wos: null
-  gr00tdual_subtask_action_12_ws: null

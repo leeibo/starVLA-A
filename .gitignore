@@ -272,6 +272,15 @@ code
 examples/RoboChallenge_table30v2/*
 examples/LIBERO/eval_files/auto_eval_scripts/run_all_libero_untested.sh
 examples/SimplerEnv/eval_files/auto_eval_scripts/auto_collect_results/schedule_widowx_eval.sh
+
+# Local tooling and checkpoint download state
+.agents/
+.feishu/
+.lark/
+feishu-cli/
+lark-cli/
+/download_ckpt.py
+/.download_*/
 examples/SimplerEnv/eval_files/auto_eval_scripts/auto_collect_results/summarize_widowx_all.sh
 examples/SimplerEnv/eval_files/auto_eval_scripts/auto_collect_results/summarize_widowx_all.sh
 examples/SimplerEnv/eval_files/auto_eval_scripts/auto_collect_results/summarize_widowx_all.sh
